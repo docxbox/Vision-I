@@ -1,0 +1,525 @@
+@inherits LayoutComponentBase
+@implements IAsyncDisposable
+@using Microsoft.AspNetCore.SignalR.Client
+@using VisionI.Web.Services
+@using VisionI.Web.Models
+@inject AuthService Auth
+@inject NavigationManager Nav
+@inject ViStateService State
+@inject ViLiveSession LiveSession
+@inject ApiService Api
+@inject CopilotService Copilot
+@inject IJSRuntime JS
+
+<MudThemeProvider Theme="_theme" IsDarkMode="true" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+@if (!_init)
+{
+    <div class="vi-auth-wall">
+        <div class="vi-auth-mark">VI</div>
+        <div class="vi-loading" style="margin-top:24px;">INITIALISING</div>
+    </div>
+}
+else if (!Auth.IsAuthenticated)
+{
+    <div class="vi-auth-wall">
+        <div class="vi-auth-mark">VI</div>
+        <div style="text-align:center;">
+            <div style="font:700 16px/1 var(--font);margin-bottom:6px;">SESSION REQUIRED</div>
+            <div style="font:400 12px/1 var(--font);color:var(--tm);">Restore session to access the workspace.</div>
+        </div>
+        <div class="vi-row">
+            <a class="vi-btn primary lg" href="/login">Sign In</a>
+            <button class="vi-btn lg" @onclick="RetryAsync">Retry</button>
+        </div>
+    </div>
+}
+else
+{
+    <div class="vi-shell">
+        <!-- TOPBAR -->
+        <header class="vi-top">
+            <button class="vi-brand" @onclick='@(() => Nav.NavigateTo("/dashboard"))'>
+                <span class="vi-brand-mark">VI</span>
+                <span class="vi-brand-name">Vision-I</span>
+            </button>
+
+            <button class="vi-search-btn" @onclick="OpenSearch">
+                <span class="material-symbols-outlined" style="font-size:16px;">search</span>
+                <span style="flex:1;text-align:left;font-size:12px;color:var(--tf);">Search events, entities…</span>
+                <span class="vi-search-hint">Ctrl K</span>
+            </button>
+
+            <div class="vi-top-mid">
+                <span class="vi-conn-pill @ConnCls">@ConnLabel</span>
+                <span class="vi-dtg">@_dtg</span>
+                <span class="vi-dtg" style="color:var(--tm);">@(Auth.CurrentUser?.DisplayName ?? "---")</span>
+            </div>
+
+            <div class="vi-top-right">
+                <div style="position:relative;">
+                    <button class="vi-icon-btn @(State.Alerts.Count > 0 ? "alert" : "")" title="Notifications"
+                            @onclick="ToggleBell">
+                        <span class="material-symbols-outlined" style="font-size:16px;">notifications_active</span>
+                        @if (State.Alerts.Count > 0)
+                        {
+                            <span class="vi-badge">@(State.Alerts.Count > 99 ? "99+" : State.Alerts.Count.ToString())</span>
+                        }
+                    </button>
+                    @if (_bellOpen)
+                    {
+                        <div style="position:absolute;top:36px;right:0;width:320px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--r2);box-shadow:0 8px 32px rgba(0,0,0,.5);z-index:9999;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--b1);">
+                                <span style="font:700 11px/1 var(--mono);letter-spacing:.06em;color:var(--tm);">NOTIFICATIONS</span>
+                                <a href="/alerts" style="font:600 11px/1 var(--mono);color:var(--acc);text-decoration:none;" @onclick="CloseBell">View all →</a>
+                            </div>
+                            @if (!State.Alerts.Any())
+                            {
+                                <div style="padding:20px 14px;font-size:12px;color:var(--tf);text-align:center;">No active alerts</div>
+                            }
+                            @foreach (var a in State.Alerts.Take(5))
+                            {
+                                <div style="padding:10px 14px;border-bottom:1px solid var(--b1);cursor:pointer;"
+                                     @onclick='() => { CloseBell(); Nav.NavigateTo("/alerts"); }'>
+                                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+                                        <span class="vi-chip @SevCls(a.Severity)" style="font-size:9px;padding:1px 5px;">@(a.Severity?.ToUpperInvariant() ?? "ALERT")</span>
+                                        <span style="font:600 12px/1 var(--font);color:var(--t);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;">@a.Title</span>
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(a.Entity))
+                                    {
+                                        <div style="font-size:11px;color:var(--tf);">Entity: @a.Entity</div>
+                                    }
+                                </div>
+                            }
+                            @if (State.Alerts.Count > 5)
+                            {
+                                <div style="padding:8px 14px;font-size:11px;color:var(--tf);text-align:center;">+@(State.Alerts.Count - 5) more alerts</div>
+                            }
+                        </div>
+                    }
+                </div>
+                <button class="vi-icon-btn vi-theme-btn" title="Toggle light/dark" @onclick="ToggleTheme">
+                    <span class="material-symbols-outlined" style="font-size:16px;">@(_lightMode ? "dark_mode" : "light_mode")</span>
+                </button>
+                <button class="vi-icon-btn" title="Toggle Copilot" @onclick="ToggleCopilot">
+                    <span class="material-symbols-outlined" style="font-size:16px;">neurology</span>
+                </button>
+                <button class="vi-signout" @onclick="Logout">Sign out</button>
+            </div>
+        </header>
+
+        <!-- BODY -->
+        <div class="vi-body @(_copilotOpen ? "with-copilot" : "")">
+            <!-- SIDEBAR -->
+            <aside class="vi-sidebar">
+                @foreach (var grp in _nav)
+                {
+                    @foreach (var item in grp)
+                    {
+                        <NavLink href="@item.Href" class="vi-nav-link" ActiveClass="active"
+                                 Match="NavLinkMatch.Prefix" title="@item.Label">
+                            <span class="material-symbols-outlined">@item.Icon</span>
+                        </NavLink>
+                    }
+                    <div class="vi-nav-sep"></div>
+                }
+                <div class="vi-sidebar-sp"></div>
+                <NavLink href="/profile" class="vi-nav-link" ActiveClass="active" Match="NavLinkMatch.All"
+                         title="@($"{Auth.CurrentUser?.DisplayName} · {Auth.CurrentUser?.Role}")">
+                    <span class="material-symbols-outlined">person</span>
+                </NavLink>
+                <button class="vi-nav-link" title="Sign out" @onclick="Logout" style="color:var(--tf);">
+                    <span class="material-symbols-outlined">logout</span>
+                </button>
+            </aside>
+
+            <!-- WORKSPACE -->
+            <section class="vi-workspace">
+                @if (State.Alerts.Any())
+                {
+                    <div class="vi-alert-strip">
+                        @foreach (var a in State.Alerts.Take(3))
+                        {
+                            <button class="vi-alert-chip" @onclick='() => Nav.NavigateTo("/alerts")'>
+                                <span>@(a.Severity?.ToUpperInvariant() ?? "ALERT")</span>
+                                <span>@a.Title</span>
+                            </button>
+                        }
+                    </div>
+                }
+
+                <main class="vi-content">
+                    <ErrorBoundary>
+                        <ChildContent>@Body</ChildContent>
+                        <ErrorContent Context="ex">
+                            <div class="vi-peb">
+                                <span class="material-symbols-outlined" style="font-size:40px;">error</span>
+                                <strong>Unhandled Error</strong>
+                                <div>@ex.Message</div>
+                            </div>
+                        </ErrorContent>
+                    </ErrorBoundary>
+                </main>
+
+                <footer class="vi-statusbar">
+                    <div class="vi-stat-grp">
+                        <span>System <strong>@(LiveSession.IsConnected ? "NOMINAL" : "DEGRADED")</strong></span>
+                        <span>Events <strong>@(State.Events.Count.ToString("N0"))</strong></span>
+                        <span>Assets <strong>@((State.Counts.Aircraft + State.Counts.Vessels).ToString("N0"))</strong></span>
+                        <span>Alerts <strong>@(State.Alerts.Count.ToString("N0"))</strong></span>
+                    </div>
+                    <div class="vi-stat-grp">
+                        <span>Flights <strong>@(State.Counts.Aircraft.ToString("N0"))</strong></span>
+                        <span>Ships <strong>@(State.Counts.Vessels.ToString("N0"))</strong></span>
+                    </div>
+                </footer>
+            </section>
+
+            <!-- COPILOT -->
+            @if (_copilotOpen)
+            {
+                <aside class="vi-copilot">
+                    <div class="vi-copilot-hdr">
+                        <span class="vi-copilot-title">JARVIS</span>
+                        <div class="vi-row tight">
+                            <a class="vi-btn sm" href="/copilot">Open</a>
+                            <button class="vi-btn sm icon" @onclick="ToggleCopilot" title="Close">
+                                <span class="material-symbols-outlined" style="font-size:14px;">close</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="vi-copilot-native">
+                        <div class="vi-copilot-surface">
+                            <span>@Copilot.SurfaceLabel</span>
+                            <strong>@Copilot.SurfaceScope</strong>
+                        </div>
+                        <div class="vi-copilot-metrics">
+                            @foreach (var metric in Copilot.LiveMetrics)
+                            {
+                                <div class="vi-copilot-metric">
+                                    <span>@metric.Label</span>
+                                    <strong>@metric.Value</strong>
+                                </div>
+                            }
+                        </div>
+                        <div class="vi-copilot-quick">
+                            <button class="vi-chip" disabled="@Copilot.Busy" @onclick="Copilot.BriefCurrentSurfaceAsync">Brief</button>
+                            <button class="vi-chip" disabled="@Copilot.Busy" @onclick="Copilot.InvestigateCurrentSurfaceAsync">Investigate</button>
+                            <button class="vi-chip" disabled="@Copilot.Busy" @onclick="Copilot.ReportCurrentSurfaceAsync">Report</button>
+                        </div>
+                    </div>
+
+                    <div class="vi-copilot-msgs">
+                        @if (!Copilot.History.Any())
+                        {
+                            <div class="vi-copilot-empty">
+                                <span class="material-symbols-outlined" style="font-size:32px;opacity:.3;">neurology</span>
+                                <span>Ask JARVIS about events, entities, or situations.</span>
+                            </div>
+                        }
+                        @foreach (var m in Copilot.History)
+                        {
+                            <div class="vi-msg @m.Role @(m.IsError ? "error" : "")">
+                                <div class="vi-msg-bubble">@m.Content</div>
+                                @if (m.Actions is { Count: > 0 })
+                                {
+                                    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;">
+                                        @foreach (var act in m.Actions)
+                                        {
+                                            <button class="vi-chip @(act.IsMutation ? "warn" : "info")"
+                                                    style="cursor:pointer;" disabled="@Copilot.Busy"
+                                                    title="@(act.IsMutation ? "Runs an action" : "Navigate")"
+                                                    @onclick="() => Copilot.ExecuteActionAsync(act)">
+                                                <span class="material-symbols-outlined" style="font-size:12px;vertical-align:middle;">@ActionIcon(act.Type)</span>
+                                                @act.Label
+                                            </button>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                        @if (Copilot.Busy)
+                        {
+                            <div class="vi-msg assistant">
+                                <div class="vi-msg-bubble" style="opacity:.6;">Analysing…</div>
+                            </div>
+                        }
+                    </div>
+
+                    <div class="vi-copilot-bar">
+                        <input class="vi-copilot-input" placeholder="Ask JARVIS…"
+                               @bind="Copilot.Input" @bind:event="oninput"
+                               @onkeydown="CopilotKey"
+                               disabled="@Copilot.Busy" />
+                        <button class="vi-copilot-send" title="Send"
+                                disabled="@(Copilot.Busy || string.IsNullOrWhiteSpace(Copilot.Input))"
+                                @onclick="SendCopilot">
+                            <span class="material-symbols-outlined" style="font-size:15px;">send</span>
+                        </button>
+                    </div>
+                </aside>
+            }
+        </div>
+    </div>
+
+    <!-- SEARCH MODAL -->
+    @if (_searchOpen)
+    {
+        <div class="vi-search-overlay" @onclick="CloseSearch">
+            <div class="vi-search-box" @onclick:stopPropagation>
+                <div class="vi-search-hdr">
+                    <span class="material-symbols-outlined" style="color:var(--tf);">search</span>
+                    <input class="vi-search-input" placeholder="Search events, entities, locations…"
+                           @bind="_q" @bind:event="oninput" @onkeyup="SearchKey" @ref="_searchRef" />
+                    <span class="vi-search-esc">ESC</span>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_q))
+                {
+                    <div class="vi-search-results">
+                        @if (_searchLoading)
+                        {
+                            <div class="vi-loading" style="padding:24px;">SEARCHING</div>
+                        }
+                        else if (_results?.Any() == true)
+                        {
+                            @foreach (var r in _results)
+                            {
+                                <div class="vi-search-result" @onclick="() => GoResult(r)">
+                                    <span class="vi-chip info">@r.Type</span>
+                                    <span class="vi-search-result-title">@r.Title</span>
+                                    <span class="vi-search-result-meta">@r.Sub</span>
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <div class="vi-empty" style="padding:24px;">No results found</div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="vi-search-hint-box">Type to search events, entities, signals…</div>
+                }
+            </div>
+        </div>
+    }
+}
+
+<ToastNotification />
+
+@code {
+    bool _init, _copilotOpen, _searchOpen, _searchLoading, _lightMode, _bellOpen;
+    string _dtg = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm'Z'");
+    string _q = "";
+    ElementReference _searchRef;
+    List<SearchHit>? _results;
+    CancellationTokenSource? _cts;
+    System.Timers.Timer? _clock, _refresh;
+
+    readonly List<List<NavItem>> _nav =
+    [
+        [ // Primary analyst workflow
+            new("/overview",       "Overview",       "monitoring"),
+            new("/dashboard",      "Dashboard",      "space_dashboard"),
+            new("/threatboard",    "Threat Board",   "crisis_alert"),
+            new("/workspaces",     "Workspaces",     "workspaces"),
+            new("/investigations", "Investigations", "manage_search"),
+            new("/operations",     "Operations",     "radar"),
+            new("/domain-intel",   "Domain Intel",   "flight"),
+            new("/reports",        "Reports",        "summarize"),
+        ],
+        [ // Admin
+            new("/admin",          "Admin",          "admin_panel_settings"),
+        ],
+    ];
+
+    readonly MudTheme _theme = new()
+    {
+        PaletteDark = new PaletteDark
+        {
+            Primary = "#a78bfa", Secondary = "#34d399", Tertiary = "#fbbf24",
+            Background = "#09090b", Surface = "#121215",
+            AppbarBackground = "#0f0f12", DrawerBackground = "#09090b",
+            TextPrimary = "#fafafa", TextSecondary = "#a1a1aa",
+            Info = "#a78bfa", Success = "#34d399", Warning = "#fbbf24", Error = "#f87171",
+            LinesDefault = "rgba(63,63,70,.5)"
+        },
+        LayoutProperties = new() { DefaultBorderRadius = "6px" }
+    };
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (!first || _init) return;
+        _init = true;
+
+        // Restore saved theme preference
+        try
+        {
+            var saved = await JS.InvokeAsync<string>("eval", "localStorage.getItem('vi-theme')||'dark'");
+            _lightMode = saved == "light";
+            if (_lightMode)
+                await JS.InvokeVoidAsync("eval", "document.documentElement.setAttribute('data-theme','light')");
+        }
+        catch { }
+
+        _clock = new(1_000) { AutoReset = true };
+        _clock.Elapsed += (_, _) => InvokeAsync(() => { _dtg = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm'Z'"); StateHasChanged(); });
+        _clock.Start();
+
+        _refresh = new(TimeSpan.FromMinutes(45).TotalMilliseconds) { AutoReset = true };
+        _refresh.Elapsed += async (_, _) =>
+        {
+            if (Auth.IsAuthenticated && await Auth.TryRefreshAsync())
+                LiveSession.UpdateToken(Auth.AccessToken);
+        };
+        _refresh.Start();
+        State.OnStateChanged += OnStateChange;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    void ToggleBell() { _bellOpen = !_bellOpen; }
+    void CloseBell() { _bellOpen = false; }
+
+    static string SevCls(string? s) => s?.ToLower() switch
+    {
+        "critical" => "severity-critical", "high" => "severity-high",
+        "medium" => "severity-medium", _ => "severity-low",
+    };
+
+    // Theme toggle
+    async Task ToggleTheme()
+    {
+        _lightMode = !_lightMode;
+        var theme = _lightMode ? "light" : "dark";
+        await JS.InvokeVoidAsync("eval",
+            $"document.documentElement.setAttribute('data-theme','{theme}');" +
+            $"localStorage.setItem('vi-theme','{theme}');");
+    }
+
+    // Copilot
+    void ToggleCopilot()
+    {
+        _copilotOpen = !_copilotOpen;
+        if (_copilotOpen) Copilot.OnChanged += OnCopilotChange;
+        else Copilot.OnChanged -= OnCopilotChange;
+    }
+
+    void OnCopilotChange() => InvokeAsync(StateHasChanged);
+
+    static string ActionIcon(string type) => type switch
+    {
+        "navigate"       => "open_in_new",
+        "open_event"     => "bolt",
+        "open_entity"    => "person",
+        "open_workspace" => "workspaces",
+        "open_report"    => "summarize",
+        "search"         => "search",
+        "focus_map"      => "map",
+        "pin_evidence"   => "push_pin",
+        "create_task"    => "add_task",
+        "ack_alert"      => "notifications_active",
+        _                => "play_arrow",
+    };
+
+    async Task SendCopilot()
+    {
+        if (string.IsNullOrWhiteSpace(Copilot.Input) || Copilot.Busy) return;
+        await Copilot.AskAsync();
+    }
+
+    async Task CopilotKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey) await SendCopilot();
+    }
+
+    // Search
+    [JSInvokable] public void OpenSearch() { _searchOpen = true; InvokeAsync(StateHasChanged); }
+    void CloseSearch() { _searchOpen = false; _q = ""; _results = null; }
+
+    async Task SearchKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") { CloseSearch(); return; }
+        _cts?.Cancel(); _cts = new();
+        var tok = _cts.Token;
+        if (_q.Length < 2) { _results = null; await InvokeAsync(StateHasChanged); return; }
+        _searchLoading = true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            await Task.Delay(350, tok);
+            var raw = await Api.GetAsync<System.Text.Json.JsonElement?>(
+                $"api/signals/search?q={Uri.EscapeDataString(_q)}&limit=10&threshold=0.4", tok);
+            _results = new();
+            if (raw?.TryGetProperty("results", out var arr) == true || raw?.TryGetProperty("signals", out arr) == true)
+            {
+                if (arr.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    foreach (var item in arr.EnumerateArray())
+                    {
+                        var id    = item.TryGetProperty("signal_id", out var si) ? si.GetString() :
+                                    item.TryGetProperty("event_id",  out var ei) ? ei.GetString() : null;
+                        var title = item.TryGetProperty("title",   out var ti) ? ti.GetString() :
+                                    item.TryGetProperty("content",  out var ci) ? ci.GetString() : "";
+                        var src   = item.TryGetProperty("source",  out var sri) ? sri.GetString() : "signal";
+                        if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(title))
+                            _results.Add(new("event", id, title, src?.ToUpperInvariant() ?? ""));
+                    }
+                }
+            }
+            if (_results.Count == 0)
+                _results = State.Events
+                    .Where(e => e.Title?.Contains(_q, StringComparison.OrdinalIgnoreCase) == true)
+                    .Take(8)
+                    .Select(e => new SearchHit("event", e.EventId ?? "", e.Title ?? "", e.Source?.ToUpperInvariant() ?? ""))
+                    .ToList();
+        }
+        catch (OperationCanceledException) { }
+        catch { _results = new(); }
+        finally { _searchLoading = false; await InvokeAsync(StateHasChanged); }
+    }
+
+    void GoResult(SearchHit r)
+    {
+        CloseSearch();
+        Nav.NavigateTo(r.Type == "entity" ? $"/entities/{Uri.EscapeDataString(r.Id)}" : $"/events/{Uri.EscapeDataString(r.Id)}");
+    }
+
+    void OnStateChange() => InvokeAsync(StateHasChanged);
+
+    // Status — read from ViLiveSession, the single hub owner for the whole app.
+    string ConnCls => LiveSession.IsConnected ? "live"
+        : (LiveSession.ConnectionState == HubConnectionState.Reconnecting ? "warn" : "off");
+
+    string ConnLabel => LiveSession.IsConnected ? "LIVE"
+        : (LiveSession.ConnectionState == HubConnectionState.Reconnecting ? "RECONNECTING" : "OFFLINE");
+
+    async Task RetryAsync()
+    {
+        await Auth.InitializeAsync();
+        Nav.NavigateTo(Auth.IsAuthenticated ? "/dashboard" : "/login", forceLoad: true);
+    }
+
+    async Task Logout()
+    {
+        await LiveSession.ResetAsync();
+        await Auth.LogoutAsync();
+        Nav.NavigateTo("/login", forceLoad: true);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        State.OnStateChanged -= OnStateChange;
+        Copilot.OnChanged    -= OnCopilotChange;
+        _clock?.Dispose(); _refresh?.Dispose(); _cts?.Cancel(); _cts?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+
+    record NavItem(string Href, string Label, string Icon);
+    record SearchHit(string Type, string Id, string Title, string Sub);
+}

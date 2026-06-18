@@ -1,0 +1,697 @@
+@page "/timeline"
+@layout AnalystLayout
+@inject ApiService Api
+@inject NavigationManager Nav
+@inject ToastService Toast
+@using VisionI.Web.Models
+@using System.Text.Json
+@implements IDisposable
+
+<PageTitle>Timeline | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Analyse / Timeline</div>
+            <h1 class="vi-h1">Event Timeline</h1>
+            <div class="vi-sub">EVENTS · ALERTS · NARRATIVES · SIGNALS · TIME REPLAY</div>
+        </div>
+        <div class="vi-page-actions">
+            @if (_refreshing)
+            {
+                <span class="vi-chip info">refreshing</span>
+            }
+            <button class="vi-btn" disabled="@_loading" @onclick="() => LoadAsync(loadAll: true)">Refresh</button>
+        </div>
+    </div>
+
+    <!-- Time controls -->
+    <div class="vi-filter-bar" style="flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+        @foreach (var p in _presets)
+        {
+            <button class="vi-btn sm @(p.Key == _preset ? "primary" : "")" @onclick="() => ApplyPreset(p.Key)">@p.Value</button>
+        }
+        <div class="vi-row" style="gap:6px;margin-left:8px;">
+            <input class="vi-input sm" type="datetime-local" style="width:180px;"
+                   value="@_fromDt.ToString("yyyy-MM-ddTHH:mm")"
+                   @onchange="e => ParseFrom(e.Value?.ToString())" />
+            <span class="vi-faint" style="align-self:center;">→</span>
+            <input class="vi-input sm" type="datetime-local" style="width:180px;"
+                   value="@_toDt.ToString("yyyy-MM-ddTHH:mm")"
+                   @onchange="e => ParseTo(e.Value?.ToString())" />
+            <button class="vi-btn sm primary" @onclick="ApplyCustom">Apply</button>
+        </div>
+        <div class="vi-row" style="gap:4px;margin-left:auto;">
+            <button class="vi-btn sm" title="Step Back" @onclick="StepBack" disabled="@_loading">
+                <span class="material-symbols-outlined" style="font-size:14px;">navigate_before</span>
+            </button>
+            <button class="vi-btn sm" title="Step Forward" @onclick="StepForward" disabled="@_loading">
+                <span class="material-symbols-outlined" style="font-size:14px;">navigate_next</span>
+            </button>
+        </div>
+    </div>
+
+    <div class="vi-filter-bar" style="flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+        <input class="vi-input sm" placeholder="Search visible timeline..."
+               style="width:220px;" @bind="_queryFilter" @bind:event="oninput" />
+        <select class="vi-select sm" style="width:160px;" @bind="_sourceFilter">
+            <option value="">All sources</option>
+            @foreach (var src in SourceOptions)
+            {
+                <option value="@src">@src.ToUpperInvariant()</option>
+            }
+        </select>
+        <label class="vi-row" style="gap:6px;font:600 11px/1 var(--mono);color:var(--tm);">
+            <input type="checkbox" @bind="_includeTelemetry" />
+            Include raw transport telemetry
+        </label>
+        @if (!_includeTelemetry && TelemetrySuppressedCount > 0)
+        {
+            <span class="vi-chip warn">@TelemetrySuppressedCount telemetry hidden</span>
+        }
+    </div>
+
+    <!-- Time scrubber -->
+    <div style="padding:8px 0 4px;display:flex;flex-direction:column;gap:4px;">
+        <div class="vi-row" style="justify-content:space-between;font:600 10px/1 var(--mono);color:var(--tf);letter-spacing:.08em;text-transform:uppercase;">
+            <span>@_fromDt.ToString("MMM dd HH:mm")</span>
+            <span style="color:var(--p);">DRAG TO SCRUB TIME WINDOW</span>
+            <span>@_toDt.ToString("MMM dd HH:mm")</span>
+        </div>
+        <input type="range" min="0" max="@_scrubMax" step="1" value="@_scrubPos"
+               style="width:100%;accent-color:var(--p);cursor:pointer;"
+               @onchange="OnScrub" @oninput="OnScrubInput" />
+        <div class="vi-row" style="justify-content:center;font:600 10px/1 var(--mono);color:var(--tm);">
+            <span>Window: @_windowLabel &nbsp;|&nbsp; Position: @_scrubLabel</span>
+        </div>
+    </div>
+
+    <!-- Summary strip -->
+    <div class="vi-metrics" style="margin-bottom:12px;">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Window Start</div>
+            <div class="vi-metric-val accent" style="font-size:11px;">@_fromDt.ToString("yyyy-MM-dd HH:mm")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Window End</div>
+            <div class="vi-metric-val accent" style="font-size:11px;">@_toDt.ToString("yyyy-MM-dd HH:mm")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Events</div>
+            <div class="vi-metric-val">@TimelineEvents.Count</div>
+            <div style="font-size:11px;color:var(--tf);">@(_events?.Total ?? 0) in window</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Alerts</div>
+            <div class="vi-metric-val err">@_alertCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Narratives</div>
+            <div class="vi-metric-val warn">@_narrativeCount</div>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="vi-row" style="gap:4px;margin-bottom:12px;flex-wrap:wrap;">
+        @foreach (var t in _tabs)
+        {
+            <button class="vi-btn @(_tab == t ? "primary" : "")" @onclick="() => SetTab(t)">@t</button>
+        }
+    </div>
+
+    @if (_loading && _events is null && _alerts is null && _narratives is null && _signals is null)
+    {
+        <div class="vi-loading">LOADING TIMELINE</div>
+    }
+    else
+    {
+        <!-- EVENTS -->
+        @if (_tab == "Events")
+        {
+            @if (_events is null || TimelineEvents.Count == 0)
+            {
+                <div class="vi-empty">
+                    <span class="material-symbols-outlined">event_note</span>
+                    No events match the current timeline filters
+                </div>
+            }
+            else
+            {
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Events</span>
+                        <span class="vi-chip info">@TimelineEvents.Count shown</span>
+                    </div>
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Source</th>
+                                    <th>Type</th>
+                                    <th>Sentiment</th>
+                                    <th>Title</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var e in TimelineEvents)
+                                {
+                                    <tr @onclick='() => Nav.NavigateTo($"/events/{Uri.EscapeDataString(e.EventId ?? "")}")' style="cursor:pointer;">
+                                        <td class="vi-td-mono vi-faint">@Fmt(e.Timestamp)</td>
+                                        <td class="vi-td-mono">@(e.Source?.ToUpperInvariant() ?? "--")</td>
+                                        <td class="vi-td-mono vi-faint">@(e.EventType ?? "--")</td>
+                                        <td>
+                                            @if (e.Sentiment is { } s)
+                                            {
+                                                <span class="vi-chip @SentCls(s.Label)">@s.Label</span>
+                                            }
+                                            else { <span class="vi-faint">--</span> }
+                                        </td>
+                                        <td class="vi-td-title vi-trunc" style="max-width:400px;">@e.Title</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            }
+        }
+
+        <!-- ALERTS -->
+        @if (_tab == "Alerts")
+        {
+            @if (_alerts is null)
+            {
+                <div class="vi-empty">
+                    <span class="material-symbols-outlined">notifications_off</span>
+                    No alert data
+                </div>
+            }
+            else
+            {
+                var alertList = GetArr(_alerts.Value, "alerts");
+                @if (alertList.Count == 0)
+                {
+                    <div class="vi-empty">
+                        <span class="material-symbols-outlined">notifications_off</span>
+                        No alerts in this window
+                    </div>
+                }
+                else
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Alerts</span>
+                            <span class="vi-chip info">@alertList.Count shown</span>
+                        </div>
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Type</th>
+                                        <th>Severity</th>
+                                        <th>Z-Score</th>
+                                        <th>Entity</th>
+                                        <th>Title</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var a in alertList)
+                                    {
+                                        var sev = GetStr(a, "severity");
+                                        <tr>
+                                            <td class="vi-td-mono vi-faint">@Fmt(GetStr(a, "triggered_at", "created_at", "timestamp"))</td>
+                                            <td class="vi-td-mono vi-faint">@GetStr(a, "alert_type")</td>
+                                            <td><span class="vi-chip @SevCls(sev)">@sev.ToUpperInvariant()</span></td>
+                                            <td class="vi-td-mono">@GetDbl(a, "z_score").ToString("0.0")</td>
+                                            <td class="vi-td-mono vi-faint vi-trunc" style="max-width:120px;">@GetStr(a, "entity")</td>
+                                            <td class="vi-td-title vi-trunc" style="max-width:320px;">@GetStr(a, "title")</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+            }
+        }
+
+        <!-- NARRATIVES -->
+        @if (_tab == "Narratives")
+        {
+            @if (_narratives is null)
+            {
+                <div class="vi-empty">
+                    <span class="material-symbols-outlined">rss_feed</span>
+                    No narrative data
+                </div>
+            }
+            else
+            {
+                var narList = GetArr(_narratives.Value, "narratives");
+                @if (narList.Count == 0)
+                {
+                    <div class="vi-empty">
+                        <span class="material-symbols-outlined">rss_feed</span>
+                        No narratives in this window
+                    </div>
+                }
+                else
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Narratives</span>
+                            <span class="vi-chip info">@narList.Count shown</span>
+                        </div>
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead>
+                                    <tr>
+                                        <th>Detected</th>
+                                        <th>Type</th>
+                                        <th>Severity</th>
+                                        <th>Status</th>
+                                        <th>Sources</th>
+                                        <th>Title</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var n in narList)
+                                    {
+                                        var sev = GetStr(n, "severity");
+                                        var st  = GetStr(n, "status");
+                                        <tr>
+                                            <td class="vi-td-mono vi-faint">@Fmt(GetStr(n, "detected_at", "created_at", "timestamp"))</td>
+                                            <td class="vi-td-mono vi-faint">@GetStr(n, "signal_type", "type")</td>
+                                            <td><span class="vi-chip @SevCls(sev)">@sev.ToUpperInvariant()</span></td>
+                                            <td><span class="vi-chip @NarStatusCls(st)">@st.ToUpperInvariant()</span></td>
+                                            <td class="vi-td-mono vi-faint">@GetStr(n, "source_count")</td>
+                                            <td class="vi-td-title vi-trunc" style="max-width:340px;">@GetStr(n, "title", "summary", "label")</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+            }
+        }
+
+        <!-- SIGNALS -->
+        @if (_tab == "Signals")
+        {
+            @if (_signals is null)
+            {
+                <div class="vi-empty">
+                    <span class="material-symbols-outlined">sensors</span>
+                    No signal data
+                </div>
+            }
+            else
+            {
+                var sigList = GetArr(_signals.Value, "signals");
+                @if (sigList.Count == 0)
+                {
+                    <div class="vi-empty">No signals in this window</div>
+                }
+                else
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Signals</span>
+                            <span class="vi-chip info">@sigList.Count shown</span>
+                        </div>
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Type</th>
+                                        <th>Source</th>
+                                        <th>Confidence</th>
+                                        <th>Title</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var s in sigList)
+                                    {
+                                        <tr>
+                                            <td class="vi-td-mono vi-faint">@Fmt(GetStr(s, "detected_at", "timestamp", "created_at"))</td>
+                                            <td class="vi-td-mono vi-faint">@GetStr(s, "signal_type", "type")</td>
+                                            <td class="vi-td-mono vi-faint">@GetStr(s, "source")</td>
+                                            <td class="vi-td-mono">@GetDbl(s, "confidence").ToString("0.00")</td>
+                                            <td class="vi-td-title vi-trunc" style="max-width:400px;">@GetStr(s, "title", "content", "summary")</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+            }
+        }
+    }
+</div>
+
+@code {
+    readonly string[] _tabs = ["Events", "Alerts", "Narratives", "Signals"];
+    string _tab = "Events";
+    bool _loading;
+    bool _refreshing;
+    CancellationTokenSource? _loadCts;
+
+    EventsResponse? _events;
+    JsonElement?    _alerts;
+    JsonElement?    _narratives;
+    JsonElement?    _signals;
+
+    int _alertCount;
+    int _narrativeCount;
+    bool _includeTelemetry;
+    string _sourceFilter = "";
+    string _queryFilter = "";
+    [Parameter][SupplyParameterFromQuery(Name = "q")] public string? Query { get; set; }
+
+    List<EventDto> TimelineEvents => (_events?.Events ?? [])
+        .Where(e => _includeTelemetry || !IsTransportTelemetry(e))
+        .Where(e => string.IsNullOrWhiteSpace(_sourceFilter) ||
+                    string.Equals(e.Source, _sourceFilter, StringComparison.OrdinalIgnoreCase))
+        .Where(e => string.IsNullOrWhiteSpace(_queryFilter) ||
+                    (e.Title?.Contains(_queryFilter, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (e.EventType?.Contains(_queryFilter, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (e.Source?.Contains(_queryFilter, StringComparison.OrdinalIgnoreCase) ?? false))
+        .Take(160)
+        .ToList();
+
+    List<string> SourceOptions => (_events?.Events ?? [])
+        .Where(e => !string.IsNullOrWhiteSpace(e.Source))
+        .Select(e => e.Source!)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(s => s)
+        .ToList();
+
+    int TelemetrySuppressedCount => _includeTelemetry
+        ? 0
+        : (_events?.Events.Count(IsTransportTelemetry) ?? 0);
+
+    DateTime _fromDt = DateTime.UtcNow.AddHours(-24);
+    DateTime _toDt   = DateTime.UtcNow;
+    string   _preset = "24h";
+
+    // Scrubber state — divides the 7-day history into 168 hourly steps
+    int _scrubMax = 167;
+    int _scrubPos = 143; // default: last 24h of 168h = step 143
+    string _scrubLabel => _fromDt.ToString("MMM dd HH:mm 'UTC'");
+    string _windowLabel
+    {
+        get
+        {
+            var span = _toDt - _fromDt;
+            if (span.TotalDays >= 1) return $"{(int)span.TotalDays}d {span.Hours}h";
+            return $"{(int)span.TotalHours}h {span.Minutes}m";
+        }
+    }
+
+    void OnScrubInput(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var pos))
+        {
+            _scrubPos = pos;
+            // Map scrub position to a time offset: 0=7 days ago, 167=now-windowSize
+            var span   = _toDt - _fromDt;
+            var maxAge = TimeSpan.FromDays(7);
+            var offset = TimeSpan.FromSeconds(maxAge.TotalSeconds * pos / _scrubMax);
+            var newFrom = DateTime.UtcNow - maxAge + offset;
+            _fromDt = newFrom;
+            _toDt   = newFrom + span;
+            if (_toDt > DateTime.UtcNow) { _toDt = DateTime.UtcNow; _fromDt = _toDt - span; }
+            _preset = "";
+            StateHasChanged();
+        }
+    }
+
+    void OnScrub(ChangeEventArgs e)
+    {
+        OnScrubInput(e);
+        _ = LoadAsync();
+    }
+
+    readonly Dictionary<string, string> _presets = new()
+    {
+        ["1h"]  = "1h",
+        ["6h"]  = "6h",
+        ["24h"] = "24h",
+        ["72h"] = "72h",
+        ["7d"]  = "7d",
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(Query))
+            _queryFilter = Query;
+        await LoadAsync(loadAll: false);
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(Query) &&
+            !string.Equals(Query, _queryFilter, StringComparison.Ordinal))
+        {
+            _queryFilter = Query;
+            await LoadAsync(loadAll: false);
+        }
+    }
+
+    async Task SetTab(string t)
+    {
+        _tab = t;
+        await LoadTabAsync();
+    }
+
+    void ApplyPreset(string key)
+    {
+        _preset = key;
+        _toDt   = DateTime.UtcNow;
+        _fromDt = key switch
+        {
+            "1h"  => DateTime.UtcNow.AddHours(-1),
+            "6h"  => DateTime.UtcNow.AddHours(-6),
+            "24h" => DateTime.UtcNow.AddHours(-24),
+            "72h" => DateTime.UtcNow.AddHours(-72),
+            "7d"  => DateTime.UtcNow.AddDays(-7),
+            _     => DateTime.UtcNow.AddHours(-24),
+        };
+        _ = LoadAsync(loadAll: false);
+    }
+
+    async Task ApplyCustom()
+    {
+        _preset = "";
+        await LoadAsync(loadAll: false);
+    }
+
+    void StepBack()
+    {
+        var span = _toDt - _fromDt;
+        _fromDt -= span;
+        _toDt   -= span;
+        _preset  = "";
+        _ = LoadAsync(loadAll: false);
+    }
+
+    void StepForward()
+    {
+        var span = _toDt - _fromDt;
+        var newTo = _toDt + span;
+        if (newTo > DateTime.UtcNow.AddMinutes(1)) return;
+        _fromDt += span;
+        _toDt   += span;
+        _preset  = "";
+        _ = LoadAsync(loadAll: false);
+    }
+
+    void ParseFrom(string? v)
+    {
+        if (DateTime.TryParse(v, out var dt))
+            _fromDt = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+    }
+
+    void ParseTo(string? v)
+    {
+        if (DateTime.TryParse(v, out var dt))
+            _toDt = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+    }
+
+    async Task LoadAsync(bool loadAll = true)
+    {
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+        _loadCts = new CancellationTokenSource();
+        var ct = _loadCts.Token;
+
+        _loading = _events is null && _alerts is null && _narratives is null && _signals is null;
+        _refreshing = true;
+        StateHasChanged();
+        try
+        {
+            var fromIso = _fromDt.ToString("o");
+            var toIso   = _toDt.ToString("o");
+
+            var eventTask = Api.GetEventsAsync(
+                from: fromIso,
+                to: toIso,
+                query: string.IsNullOrWhiteSpace(_queryFilter) ? null : _queryFilter,
+                limit: 1000,
+                ct: ct);
+            await eventTask;
+            _events = eventTask.Result;
+
+            if (loadAll)
+            {
+                var t2 = Api.GetAsync<JsonElement?>($"api/alerts?limit=100&from={Uri.EscapeDataString(fromIso)}", ct);
+                var t3 = Api.GetAsync<JsonElement?>($"api/narratives?limit=100&from_time={Uri.EscapeDataString(fromIso)}", ct);
+                var t4 = Api.GetAsync<JsonElement?>($"api/signals?limit=100", ct);
+                await Task.WhenAll(t2, t3, t4);
+                _alerts = t2.Result;
+                _narratives = t3.Result;
+                _signals = t4.Result;
+            }
+            else
+            {
+                await LoadTabPayloadAsync(fromIso, toIso, ct);
+            }
+
+            _alertCount    = _alerts.HasValue    ? GetArr(_alerts.Value,    "alerts")    .Count : 0;
+            _narrativeCount = _narratives.HasValue ? GetArr(_narratives.Value, "narratives").Count : 0;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Toast.ShowError($"Timeline: {ex.Message}"); }
+        finally
+        {
+            if (!ct.IsCancellationRequested)
+            {
+                _loading = false;
+                _refreshing = false;
+            }
+        }
+    }
+
+    async Task LoadTabAsync()
+    {
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+        _loadCts = new CancellationTokenSource();
+        var ct = _loadCts.Token;
+        _refreshing = true;
+        StateHasChanged();
+        try
+        {
+            var fromIso = _fromDt.ToString("o");
+            var toIso   = _toDt.ToString("o");
+            await LoadTabPayloadAsync(fromIso, toIso, ct);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Toast.ShowError($"{_tab}: {ex.Message}"); }
+        finally { if (!ct.IsCancellationRequested) _refreshing = false; }
+    }
+
+    async Task LoadTabPayloadAsync(string fromIso, string toIso, CancellationToken ct)
+    {
+        switch (_tab)
+        {
+            case "Events":
+                _events = await Api.GetEventsAsync(
+                    from: fromIso,
+                    to: toIso,
+                    query: string.IsNullOrWhiteSpace(_queryFilter) ? null : _queryFilter,
+                    limit: 1000,
+                    ct: ct);
+                break;
+            case "Alerts":
+                _alerts = await Api.GetAsync<JsonElement?>($"api/alerts?limit=100&from={Uri.EscapeDataString(fromIso)}", ct);
+                _alertCount = _alerts.HasValue ? GetArr(_alerts.Value, "alerts").Count : 0;
+                break;
+            case "Narratives":
+                _narratives = await Api.GetAsync<JsonElement?>($"api/narratives?limit=100&from_time={Uri.EscapeDataString(fromIso)}", ct);
+                _narrativeCount = _narratives.HasValue ? GetArr(_narratives.Value, "narratives").Count : 0;
+                break;
+            case "Signals":
+                _signals = await Api.GetAsync<JsonElement?>($"api/signals?limit=100", ct);
+                break;
+        }
+    }
+
+    static string Fmt(string? ts)
+    {
+        if (string.IsNullOrWhiteSpace(ts)) return "--";
+        return ts.Length >= 16 ? ts[..16].Replace("T", " ") : ts;
+    }
+
+    static bool IsTransportTelemetry(EventDto e)
+    {
+        var source = e.Source ?? "";
+        var type = e.EventType ?? "";
+        var title = e.Title ?? "";
+
+        return source.Equals("opensky", StringComparison.OrdinalIgnoreCase) ||
+               source.Equals("ais", StringComparison.OrdinalIgnoreCase) ||
+               type.Contains("transport", StringComparison.OrdinalIgnoreCase) ||
+               type.Contains("maritime", StringComparison.OrdinalIgnoreCase) ||
+               type.Contains("aviation", StringComparison.OrdinalIgnoreCase) ||
+               title.StartsWith("[ANOMALY] Flight", StringComparison.OrdinalIgnoreCase) ||
+               title.StartsWith("[ANOMALY] Vessel", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static string SevCls(string? s) => s?.ToLowerInvariant() switch
+    {
+        "critical" or "high" => "err",
+        "medium"             => "warn",
+        "low"                => "ok",
+        _                    => ""
+    };
+
+    static string SentCls(string? s) => s?.ToUpperInvariant() switch
+    {
+        "POSITIVE" => "ok",
+        "NEGATIVE" => "err",
+        _          => ""
+    };
+
+    static string NarStatusCls(string? s) => s?.ToLowerInvariant() switch
+    {
+        "active"   => "warn",
+        "resolved" => "ok",
+        _          => ""
+    };
+
+    static string GetStr(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v))
+                return v.ValueKind == JsonValueKind.String ? v.GetString() ?? "--" : v.ToString();
+        return "--";
+    }
+
+    static double GetDbl(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number)
+                return v.GetDouble();
+        return 0;
+    }
+
+    static List<JsonElement> GetArr(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Array)
+                return v.EnumerateArray().ToList();
+        return new();
+    }
+
+    public void Dispose()
+    {
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+    }
+}

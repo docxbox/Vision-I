@@ -1,0 +1,121 @@
+@inject NavigationManager Nav
+
+@if (Assets is null)
+{
+    <EmptyState Message="No asset data." />
+}
+else
+{
+    <div class="vi-metrics" style="margin-bottom:16px;">
+        <div class="vi-metric"><div class="vi-metric-label">Total</div><div class="vi-metric-val accent">@Assets.TotalAssets</div></div>
+        <div class="vi-metric"><div class="vi-metric-label">Vessels</div><div class="vi-metric-val">@Assets.VesselCount</div></div>
+        <div class="vi-metric"><div class="vi-metric-label">Aircraft</div><div class="vi-metric-val">@Assets.FlightCount</div></div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Anomalies</div>
+            <div class="vi-metric-val @(Assets.AnomalyCount > 0 ? "err" : "")">@Assets.AnomalyCount</div>
+        </div>
+    </div>
+
+    var anomalies = Assets.AssetItems.Where(a => a.IsAnomaly).ToList();
+    var normal    = Assets.AssetItems.Where(a => !a.IsAnomaly).ToList();
+    var inAoi     = Assets.AssetItems.Count(a => a.WithinAoi);
+    var regional  = Assets.AssetItems.Count - inAoi;
+
+    @if (regional > 0)
+    {
+        <div class="vi-panel" style="margin-bottom:14px;border-left:3px solid var(--accent);">
+            <div class="vi-panel-hdr">
+                <span class="material-symbols-outlined" style="font-size:15px;color:var(--acc);">travel_explore</span>
+                <span class="vi-panel-title">Regional Context Enabled</span>
+                <span class="vi-chip">@inAoi AOI</span>
+                <span class="vi-chip info">@regional regional</span>
+            </div>
+            <div class="vi-panel-body" style="font-size:12px;color:var(--t2);line-height:1.55;">
+                The primary box is sparse, so this view includes nearby maritime/aviation context around the workspace. Assets inside the exact AOI are tagged <span class="vi-chip">AOI</span>.
+            </div>
+        </div>
+    }
+
+    @if (anomalies.Any())
+    {
+        <div class="vi-panel" style="margin-bottom:14px;border-left:3px solid var(--err);">
+            <div class="vi-panel-hdr">
+                <span class="material-symbols-outlined" style="font-size:15px;color:var(--err);">warning</span>
+                <span class="vi-panel-title">Anomalous Assets</span>
+                <span class="vi-chip err">@anomalies.Count detected</span>
+            </div>
+            <div class="vi-tbl-wrap">
+                <table class="vi-table">
+                    <thead><tr><th>Type</th><th>Name / Callsign</th><th>Origin</th><th>Position</th><th>Speed / Alt</th><th>Last Seen</th><th>Why Flagged</th></tr></thead>
+                    <tbody>
+                        @foreach (var a in anomalies)
+                        {
+                            var dn   = !string.IsNullOrEmpty(a.Name) ? a.Name : (a.Callsign ?? a.AssetId);
+                            var lat  = a.LastLat.HasValue  ? $"{a.LastLat.Value:F4}°N"  : "—";
+                            var lon  = a.LastLon.HasValue  ? $"{a.LastLon.Value:F4}°E"  : "—";
+                            var spd  = a.LastSpeed.HasValue ? a.LastSpeed.Value.ToString("F1") : "—";
+                            var seen = a.LastSeen is { Length: > 10 } ? a.LastSeen[..16].Replace("T", " ") : (a.LastSeen ?? "—");
+                            var why  = a.AssetType == "aircraft"   ? "Airborne activity in AOI" :
+                                       (a.LastSpeed ?? 0) > 20     ? "High speed detected"      : "Anomalous behavior";
+                            <tr style="background:rgba(248,113,113,0.04);cursor:pointer;"
+                                @onclick='() => Nav.NavigateTo($"/assets/{Uri.EscapeDataString(a.AssetId)}?from={Uri.EscapeDataString(Slug)}")'>
+                                <td><span class="vi-chip">@a.AssetType</span> @if (a.WithinAoi) { <span class="vi-chip info">AOI</span> }</td>
+                                <td style="font-size:12px;font-weight:500;">@dn</td>
+                                <td style="font-size:11px;color:var(--tm);">@(a.OriginCountry ?? "—")</td>
+                                <td style="font-size:11px;">@lat, @lon</td>
+                                <td style="font-size:11px;color:var(--err);font-weight:600;">@spd @if (a.LastAltitude.HasValue) { <span style="color:var(--tf);">/ @a.LastAltitude.Value.ToString("F0")m</span> }</td>
+                                <td style="font-size:11px;color:var(--tm);">@seen</td>
+                                <td style="font-size:11px;color:var(--warn);">@why</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div style="padding:10px 14px;background:var(--s2);border-radius:var(--r1);font-size:12px;color:var(--ok);margin-bottom:14px;">
+            No anomalies detected in the current time window.
+        </div>
+    }
+
+    @if (normal.Any())
+    {
+        <div class="vi-panel">
+            <div class="vi-panel-hdr">
+                <span class="vi-panel-title">Traffic</span>
+                <span class="vi-chip">@normal.Count assets</span>
+            </div>
+            <div class="vi-tbl-wrap">
+                <table class="vi-table">
+                    <thead><tr><th>Type</th><th>Name / Callsign</th><th>Origin</th><th>Lat</th><th>Lon</th><th>Speed / Heading</th><th>Last Seen</th></tr></thead>
+                    <tbody>
+                        @foreach (var a in normal)
+                        {
+                            var dn   = !string.IsNullOrEmpty(a.Name) ? a.Name : (a.Callsign ?? a.AssetId);
+                            var lat  = a.LastLat.HasValue  ? a.LastLat.Value.ToString("F4")  : "—";
+                            var lon  = a.LastLon.HasValue  ? a.LastLon.Value.ToString("F4")  : "—";
+                            var spd  = a.LastSpeed.HasValue ? a.LastSpeed.Value.ToString("F1") : "—";
+                            var seen = a.LastSeen is { Length: > 10 } ? a.LastSeen[..16].Replace("T", " ") : (a.LastSeen ?? "—");
+                            <tr style="cursor:pointer;" @onclick='() => Nav.NavigateTo($"/assets/{Uri.EscapeDataString(a.AssetId)}?from={Uri.EscapeDataString(Slug)}")'>
+                                <td><span class="vi-chip">@a.AssetType</span> @if (a.WithinAoi) { <span class="vi-chip info">AOI</span> }</td>
+                                <td style="font-size:12px;">@dn</td>
+                                <td style="font-size:11px;color:var(--tm);">@(a.OriginCountry ?? "—")</td>
+                                <td style="font-size:11px;">@lat</td>
+                                <td style="font-size:11px;">@lon</td>
+                                <td style="font-size:11px;">@spd @if (a.LastHeading.HasValue) { <span style="color:var(--tf);">/ @a.LastHeading.Value.ToString("F0")°</span> }</td>
+                                <td style="font-size:11px;color:var(--tm);">@seen</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public WorkspaceAssets? Assets { get; set; }
+    [Parameter] public string           Slug   { get; set; } = "";
+}

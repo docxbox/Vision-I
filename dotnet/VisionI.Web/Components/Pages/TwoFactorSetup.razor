@@ -1,0 +1,170 @@
+@page "/profile/2fa"
+@layout MainLayout
+@inject ApiService Api
+@inject ToastService Toast
+@using System.Text.Json
+
+<PageTitle>Two-Factor Authentication | Vision-I</PageTitle>
+
+<div class="vi-page" style="max-width:520px;">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Profile / Security</div>
+            <h1 class="vi-h1">Two-Factor Authentication</h1>
+            <div class="vi-sub">TOTP · AUTHENTICATOR APP · 6-DIGIT CODE</div>
+        </div>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="vi-loading">LOADING</div>
+    }
+    else if (_step == "start")
+    {
+        <div class="vi-panel">
+            <div class="vi-panel-hdr"><span class="vi-panel-title">Status</span></div>
+            <div style="padding:16px;display:flex;flex-direction:column;gap:12px;">
+                @if (_enabled)
+                {
+                    <div class="vi-row" style="gap:8px;align-items:center;">
+                        <span class="vi-chip ok">2FA ENABLED</span>
+                        <span class="vi-faint" style="font-size:12px;">Your account is protected with TOTP.</span>
+                    </div>
+                    <div class="vi-row" style="gap:6px;margin-top:8px;">
+                        <button class="vi-btn err" @onclick="DisableStart">Disable 2FA</button>
+                    </div>
+                }
+                else
+                {
+                    <div class="vi-row" style="gap:8px;align-items:center;">
+                        <span class="vi-chip warn">2FA DISABLED</span>
+                        <span class="vi-faint" style="font-size:12px;">Add a second factor to secure your account.</span>
+                    </div>
+                    <button class="vi-btn primary" style="align-self:flex-start;margin-top:8px;" @onclick="SetupStart">
+                        Set up authenticator app
+                    </button>
+                }
+            </div>
+        </div>
+    }
+    else if (_step == "setup")
+    {
+        <div class="vi-panel">
+            <div class="vi-panel-hdr"><span class="vi-panel-title">Setup</span></div>
+            <div style="padding:16px;display:flex;flex-direction:column;gap:14px;">
+                <div class="vi-faint" style="font-size:12px;line-height:1.6;">
+                    Scan the QR code with Google Authenticator, Authy, or any TOTP app.
+                    Or manually enter the secret key below.
+                </div>
+
+                @if (!string.IsNullOrEmpty(_otpauthUri))
+                {
+                    <div id="qrcode-container" style="background:#fff;width:200px;height:200px;padding:8px;border-radius:6px;display:flex;align-items:center;justify-content:center;">
+                        <img src="@($"https://api.qrserver.com/v1/create-qr-code/?size=184x184&data={Uri.EscapeDataString(_otpauthUri)}")"
+                             width="184" height="184" alt="QR Code" />
+                    </div>
+                }
+
+                <div>
+                    <div class="vi-metric-label" style="margin-bottom:4px;">Secret key (manual entry)</div>
+                    <code style="font:700 13px/1 var(--mono);color:var(--p);background:var(--s2);padding:6px 10px;border-radius:4px;letter-spacing:.08em;">@_secret</code>
+                </div>
+
+                <div>
+                    <div class="vi-metric-label" style="margin-bottom:4px;">Enter 6-digit code to confirm</div>
+                    <div class="vi-row" style="gap:6px;">
+                        <input class="vi-input" style="width:140px;font:700 18px/1 var(--mono);letter-spacing:.2em;text-align:center;"
+                               maxlength="6" placeholder="000000"
+                               @bind="_code" @bind:event="oninput" />
+                        <button class="vi-btn primary" @onclick="VerifySetup" disabled="@(_code.Length < 6 || _busy)">Verify</button>
+                    </div>
+                </div>
+                <button class="vi-btn" style="align-self:flex-start;" @onclick="Cancel">Cancel</button>
+            </div>
+        </div>
+    }
+    else if (_step == "disable")
+    {
+        <div class="vi-panel">
+            <div class="vi-panel-hdr"><span class="vi-panel-title">Disable 2FA</span></div>
+            <div style="padding:16px;display:flex;flex-direction:column;gap:14px;">
+                <div class="vi-faint" style="font-size:12px;">Enter your current 6-digit code to confirm disabling 2FA.</div>
+                <div class="vi-row" style="gap:6px;">
+                    <input class="vi-input" style="width:140px;font:700 18px/1 var(--mono);letter-spacing:.2em;text-align:center;"
+                           maxlength="6" placeholder="000000"
+                           @bind="_code" @bind:event="oninput" />
+                    <button class="vi-btn err" @onclick="VerifyDisable" disabled="@(_code.Length < 6 || _busy)">Disable</button>
+                </div>
+                <button class="vi-btn" style="align-self:flex-start;" @onclick="Cancel">Cancel</button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    string _step = "start";
+    bool _loading = true, _busy = false, _enabled = false;
+    string _secret = "", _otpauthUri = "", _code = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var me = await Api.GetAsync<JsonElement?>("api/auth/me");
+            // 2FA status not in /me yet — assume disabled as default
+            _enabled = false;
+        }
+        catch { }
+        finally { _loading = false; }
+    }
+
+    async Task SetupStart()
+    {
+        _busy = true;
+        try
+        {
+            var resp = await Api.PostAsync<JsonElement?>("api/auth/2fa/setup", new { });
+            if (resp.HasValue)
+            {
+                _secret     = resp.Value.TryGetProperty("secret",      out var s) ? s.GetString() ?? "" : "";
+                _otpauthUri = resp.Value.TryGetProperty("otpauth_uri", out var u) ? u.GetString() ?? "" : "";
+            }
+            _code = "";
+            _step = "setup";
+        }
+        catch (Exception ex) { Toast.ShowError($"Setup failed: {ex.Message}"); }
+        finally { _busy = false; }
+    }
+
+    async Task VerifySetup()
+    {
+        _busy = true;
+        try
+        {
+            await Api.PostAsync<JsonElement?>("api/auth/2fa/verify", new { code = _code });
+            _enabled = true;
+            _step = "start";
+            Toast.ShowSuccess("2FA enabled successfully.");
+        }
+        catch (Exception ex) { Toast.ShowError($"Verification failed: {ex.Message}"); }
+        finally { _busy = false; }
+    }
+
+    void DisableStart() { _code = ""; _step = "disable"; }
+
+    async Task VerifyDisable()
+    {
+        _busy = true;
+        try
+        {
+            await Api.PostAsync<JsonElement?>("api/auth/2fa/disable", new { code = _code });
+            _enabled = false;
+            _step = "start";
+            Toast.ShowSuccess("2FA disabled.");
+        }
+        catch (Exception ex) { Toast.ShowError($"Failed: {ex.Message}"); }
+        finally { _busy = false; }
+    }
+
+    void Cancel() { _step = "start"; _code = ""; }
+}

@@ -1,0 +1,643 @@
+@page "/intelligence"
+@layout AnalystLayout
+@inject ApiService Api
+@inject ToastService Toast
+@using System.Text.Json
+
+<PageTitle>Intelligence | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Analyse / Intelligence</div>
+            <h1 class="vi-h1">Intelligence Suite</h1>
+            <div class="vi-sub">BOT SCORES · CREDIBILITY · ESCALATION · CAUSALITY · COMMUNITY · INFLUENCE · SENTIMENT</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" disabled="@_loading" @onclick="RefreshTabAsync">Refresh</button>
+        </div>
+    </div>
+
+    <!-- Tab bar -->
+    <div class="vi-row" style="gap:4px;margin-bottom:12px;flex-wrap:wrap;">
+        @foreach (var t in _tabs)
+        {
+            <button class="vi-btn @(_tab == t ? "primary" : "")" @onclick="() => SetTab(t)">@t</button>
+        }
+    </div>
+
+    <!-- ── ESCALATION ── -->
+    @if (_tab == "Escalation")
+    {
+        @if (_loading) { <div class="vi-loading">COMPUTING ESCALATION</div> }
+        else if (_escalation is null || _escalation.Scores.Count == 0)
+        { <div class="vi-empty"><span class="material-symbols-outlined">warning</span>No escalation data</div> }
+        else
+        {
+            <div class="vi-panel-body vi-faint" style="font-size:11px;margin-bottom:8px;">Generated @(_escalation.GeneratedAt?[..16])</div>
+            <div class="vi-panel">
+                <div class="vi-tbl-wrap">
+                    <table class="vi-table">
+                        <thead><tr><th>Region</th><th>Score</th><th>Risk</th><th>Confidence</th><th>Events</th><th>Drivers</th></tr></thead>
+                        <tbody>
+                            @foreach (var s in _escalation.Scores.OrderByDescending(x => x.Score))
+                            {
+                                <tr>
+                                    <td class="vi-td-title">@s.Region</td>
+                                    <td class="vi-td-mono">@s.Score.ToString("0.000")</td>
+                                    <td><span class="vi-chip @RiskCls(s.RiskLevel)">@s.RiskLevel.ToUpperInvariant()</span></td>
+                                    <td class="vi-td-mono vi-faint">@s.Confidence.ToString("0.00")</td>
+                                    <td class="vi-td-mono vi-faint">@s.EventCount</td>
+                                    <td class="vi-td-mono vi-faint vi-trunc" style="max-width:240px;">@string.Join(", ", s.Drivers)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        }
+    }
+
+    <!-- ── BOT SCORES ── -->
+    @if (_tab == "Bot Scores")
+    {
+        <div class="vi-row" style="gap:8px;margin-bottom:10px;">
+            <label class="vi-label">Window (h)</label>
+            <input class="vi-input" type="number" style="width:80px;" @bind="_botWindowHours" min="1" max="168" />
+            <button class="vi-btn sm" @onclick="LoadBotScoresAsync">Run</button>
+        </div>
+        @if (_loading) { <div class="vi-loading">SCORING ACTORS</div> }
+        else if (_botScores is null || _botScores.Actors.Count == 0)
+        { <div class="vi-empty"><span class="material-symbols-outlined">smart_toy</span>No bot score data</div> }
+        else
+        {
+            <div class="vi-metrics" style="margin-bottom:10px;">
+                <div class="vi-metric"><div class="vi-metric-label">Total Actors</div><div class="vi-metric-val accent">@_botScores.Total</div></div>
+                <div class="vi-metric"><div class="vi-metric-label">High Risk</div><div class="vi-metric-val err">@_botScores.HighRisk</div></div>
+            </div>
+            <div class="vi-panel">
+                <div class="vi-tbl-wrap">
+                    <table class="vi-table">
+                        <thead><tr><th>Actor</th><th>Bot Score</th><th>Risk</th><th>Events</th><th>Sources</th><th>Signals</th></tr></thead>
+                        <tbody>
+                            @foreach (var a in _botScores.Actors)
+                            {
+                                <tr>
+                                    <td class="vi-td-title">@a.ActorName</td>
+                                    <td class="vi-td-mono">
+                                        <div style="display:flex;align-items:center;gap:6px;">
+                                            <div style="width:60px;height:4px;background:var(--s3);border-radius:2px;">
+                                                <div style="width:@((a.BotScore*100).ToString("0"))%;height:4px;background:@ScoreColor(a.BotScore);border-radius:2px;"></div>
+                                            </div>
+                                            @a.BotScore.ToString("0.000")
+                                        </div>
+                                    </td>
+                                    <td><span class="vi-chip @RiskCls(a.RiskLevel)">@a.RiskLevel.ToUpperInvariant()</span></td>
+                                    <td class="vi-td-mono vi-faint">@a.EventCount</td>
+                                    <td class="vi-td-mono vi-faint vi-trunc" style="max-width:120px;">@string.Join(", ", a.Sources)</td>
+                                    <td class="vi-td-mono vi-faint" style="font-size:10px;">@string.Join(", ", a.Signals.Select(kv => $"{kv.Key}:{kv.Value:0.00}"))</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        }
+    }
+
+    <!-- ── CREDIBILITY ── -->
+    @if (_tab == "Credibility")
+    {
+        @if (_loading) { <div class="vi-loading">COMPUTING CREDIBILITY</div> }
+        else if (_credibility is null || _credibility.Sources.Count == 0)
+        { <div class="vi-empty"><span class="material-symbols-outlined">verified</span>No credibility data</div> }
+        else
+        {
+            <div class="vi-panel">
+                <div class="vi-tbl-wrap">
+                    <table class="vi-table">
+                        <thead><tr><th>Source</th><th>Key</th><th>Score</th><th>Tier</th><th>Boosts</th><th>Penalties</th><th>Computed</th></tr></thead>
+                        <tbody>
+                            @foreach (var s in _credibility.Sources)
+                            {
+                                <tr>
+                                    <td class="vi-td-title">@s.DisplayName</td>
+                                    <td class="vi-td-mono vi-faint">@s.SourceKey</td>
+                                    <td class="vi-td-mono">
+                                        <div style="display:flex;align-items:center;gap:6px;">
+                                            <div style="width:60px;height:4px;background:var(--s3);border-radius:2px;">
+                                                <div style="width:@((s.CredibilityScore*100).ToString("0"))%;height:4px;background:@ScoreColor(s.CredibilityScore);border-radius:2px;"></div>
+                                            </div>
+                                            @s.CredibilityScore.ToString("0.00")
+                                        </div>
+                                    </td>
+                                    <td class="vi-td-mono vi-faint">@s.Tier</td>
+                                    <td class="vi-td-mono ok">+@s.BoostCount</td>
+                                    <td class="vi-td-mono err">-@s.PenaltyCount</td>
+                                    <td class="vi-td-mono vi-faint">@(s.LastComputed?[..10] ?? "--")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        }
+    }
+
+    <!-- ── CAUSALITY ── -->
+    @if (_tab == "Causality")
+    {
+        <div class="vi-panel" style="margin-bottom:12px;">
+            <div class="vi-panel-hdr"><span class="vi-panel-title">Granger Causality Test</span></div>
+            <div class="vi-panel-body">
+                <div class="vi-row" style="gap:12px;flex-wrap:wrap;">
+                    <div class="vi-field">
+                        <label class="vi-label">Series A (cause)</label>
+                        <select class="vi-input" @bind="_causalA">
+                            @foreach (var s in _series) { <option value="@s">@s</option> }
+                        </select>
+                    </div>
+                    <div class="vi-field">
+                        <label class="vi-label">Series B (effect)</label>
+                        <select class="vi-input" @bind="_causalB">
+                            @foreach (var s in _series) { <option value="@s">@s</option> }
+                        </select>
+                    </div>
+                    <div class="vi-field">
+                        <label class="vi-label">Lag (h)</label>
+                        <input class="vi-input" type="number" style="width:80px;" @bind="_causalLag" min="6" max="336" />
+                    </div>
+                    <div style="align-self:flex-end;">
+                        <button class="vi-btn primary" disabled="@_loading" @onclick="LoadCausalityAsync">Test</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        @if (_loading) { <div class="vi-loading">RUNNING GRANGER TEST</div> }
+        else if (_causality is not null)
+        {
+            <div class="vi-panel soft">
+                <div class="vi-panel-hdr">
+                    <span class="vi-panel-title">Result</span>
+                    <span class="vi-chip @(_causality.Significant ? "ok" : "")">@(_causality.Significant ? "SIGNIFICANT" : "NOT SIGNIFICANT")</span>
+                </div>
+                <div class="vi-panel-body">
+                    <dl class="vi-kv">
+                        <dt>Granger p-value</dt>  <dd class="vi-td-mono">@(_causality.GrangerPValue?.ToString("0.000000") ?? "--")</dd>
+                        <dt>Lag hours</dt>         <dd class="vi-td-mono">@_causality.LagHours</dd>
+                        <dt>Interpretation</dt>    <dd>@_causality.Interpretation</dd>
+                        @if (!string.IsNullOrWhiteSpace(_causality.Error))
+                        {
+                            <dt>Note</dt> <dd class="vi-faint">@_causality.Error</dd>
+                        }
+                    </dl>
+                    @if (_causality.TimeSeriesA.Count > 0)
+                    {
+                        <div style="margin-top:12px;font-size:11px;color:var(--tm);">
+                            @_causality.SeriesA — @_causality.TimeSeriesA.Count data points &nbsp;|&nbsp;
+                            @_causality.SeriesB — @_causality.TimeSeriesB.Count data points
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    }
+
+    <!-- ── COMMUNITY GRAPH ── -->
+    @if (_tab == "Community")
+    {
+        <div class="vi-row" style="gap:8px;margin-bottom:10px;">
+            <label class="vi-label">Window (h)</label>
+            <input class="vi-input" type="number" style="width:80px;" @bind="_communityHours" min="1" max="720" />
+            <button class="vi-btn sm" @onclick="ReloadCommunityAsync">Reload</button>
+        </div>
+        @if (_loading) { <div class="vi-loading">BUILDING COMMUNITY GRAPH</div> }
+        else if (_communityFailed)
+        {
+            <div class="vi-empty">
+                <span class="material-symbols-outlined">hub</span>
+                Community graph unavailable — Neo4j offline or graph computation timed out.
+                <div style="margin-top:8px;"><button class="vi-btn sm" @onclick="ReloadCommunityAsync">Retry</button></div>
+            </div>
+        }
+        else if (_community is null)
+        { <div class="vi-empty"><span class="material-symbols-outlined">hub</span>No community data — run Reload to compute.</div> }
+        else
+        {
+            <div class="vi-metrics" style="margin-bottom:10px;">
+                <div class="vi-metric"><div class="vi-metric-label">Communities</div><div class="vi-metric-val accent">@_community.Communities</div></div>
+                <div class="vi-metric"><div class="vi-metric-label">Actors</div><div class="vi-metric-val">@_community.ActorCount</div></div>
+                <div class="vi-metric"><div class="vi-metric-label">Edges</div><div class="vi-metric-val">@(_community.TemporalGraph?.Edges.Count ?? 0)</div></div>
+                <div class="vi-metric"><div class="vi-metric-label">Nodes</div><div class="vi-metric-val">@(_community.TemporalGraph?.Nodes.Count ?? 0)</div></div>
+            </div>
+            @if (_community.TemporalGraph?.Edges.Count > 0)
+            {
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Top Co-activation Edges</span></div>
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead><tr><th>From</th><th>To</th><th>Weight</th><th>First</th><th>Last</th></tr></thead>
+                            <tbody>
+                                @foreach (var e in _community.TemporalGraph.Edges.OrderByDescending(x => x.Weight).Take(30))
+                                {
+                                    <tr>
+                                        <td class="vi-td-mono">@e.From</td>
+                                        <td class="vi-td-mono">@e.To</td>
+                                        <td class="vi-td-mono accent">@e.Weight</td>
+                                        <td class="vi-td-mono vi-faint">@(e.FirstCo?[..10] ?? "--")</td>
+                                        <td class="vi-td-mono vi-faint">@(e.LastCo?[..10] ?? "--")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            }
+        }
+    }
+
+    <!-- ── INFLUENCE ── -->
+    @if (_tab == "Influence")
+    {
+        <div class="vi-split">
+            <div class="vi-stack">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Top Influencers</span></div>
+                    @if (_loading) { <div class="vi-loading" style="padding:16px;">LOADING</div> }
+                    else if (_influenceActors is null)
+                    { <div class="vi-empty">No influence data</div> }
+                    else
+                    {
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead><tr><th>Actor</th><th>Score</th></tr></thead>
+                                <tbody>
+                                    @foreach (var a in GetInfluenceActors())
+                                    {
+                                        <tr>
+                                            <td class="vi-td-title">@GetStr(a, "name")</td>
+                                            <td class="vi-td-mono">@GetDbl(a, "score", "influence_score").ToString("0.000")</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                        @if (GetStr(_influenceActors.Value, "note") is { Length: > 0 } note)
+                        {
+                            <div class="vi-panel-body vi-faint" style="font-size:11px;">@note</div>
+                        }
+                    }
+                </div>
+            </div>
+
+            <div class="vi-stack">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Propaganda / Coordinated Campaigns</span></div>
+                    @if (_propaganda is null)
+                    { <div class="vi-empty">No propaganda data</div> }
+                    else
+                    {
+                        <div class="vi-panel-body">
+                            @if (GetArr(_propaganda.Value, "campaigns").Count == 0)
+                            {
+                                <div class="vi-faint" style="font-size:12px;">No coordinated campaigns detected in window.</div>
+                            }
+                            else
+                            {
+                                @foreach (var c in GetArr(_propaganda.Value, "campaigns").Take(10))
+                                {
+                                    <div class="vi-card" style="margin-bottom:8px;padding:8px;background:var(--s2);border-radius:4px;">
+                                        <div class="vi-td-title">@GetStr(c, "title", "cluster_title", "label")</div>
+                                        <div class="vi-faint" style="font-size:11px;">
+                                            Sources: @GetStr(c, "source_count", "sources") &nbsp;|&nbsp;
+                                            Events: @GetStr(c, "count", "event_count")
+                                        </div>
+                                    </div>
+                                }
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Herd Mentality / Narrative Convergence</span></div>
+                    @if (_herd is null)
+                    { <div class="vi-empty">No herd data</div> }
+                    else
+                    {
+                        <div class="vi-panel-body">
+                            @if (GetArr(_herd.Value, "campaigns").Count == 0)
+                            {
+                                <div class="vi-faint" style="font-size:12px;">No convergent narrative clusters detected in window.</div>
+                            }
+                            else
+                            {
+                                @foreach (var c in GetArr(_herd.Value, "campaigns").Take(10))
+                                {
+                                    <div class="vi-card" style="margin-bottom:8px;padding:8px;background:var(--s2);border-radius:4px;">
+                                        <div class="vi-td-title">@GetStr(c, "title", "cluster_title", "label")</div>
+                                        <div class="vi-faint" style="font-size:11px;">
+                                            Sources: @GetStr(c, "source_count", "sources") &nbsp;|&nbsp;
+                                            Events: @GetStr(c, "count", "event_count")
+                                        </div>
+                                    </div>
+                                }
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- ── SENTIMENT ── -->
+    @if (_tab == "Sentiment")
+    {
+        <div class="vi-split">
+            <div class="vi-stack">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Sentiment Timeline</span></div>
+                    @if (_loading) { <div class="vi-loading" style="padding:16px;">LOADING</div> }
+                    else if (_sentimentTimeline is null)
+                    { <div class="vi-empty">No timeline data</div> }
+                    else
+                    {
+                        @if (GetArr(_sentimentTimeline.Value, "timeline", "data", "points").Count == 0)
+                        {
+                            <div class="vi-empty">No timeline points</div>
+                        }
+                        else
+                        {
+                            <div class="vi-tbl-wrap">
+                                <table class="vi-table">
+                                    <thead><tr><th>Date</th><th>Avg Score</th><th>Positive</th><th>Neutral</th><th>Negative</th><th>Events</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var p in GetArr(_sentimentTimeline.Value, "timeline", "data", "points"))
+                                        {
+                                            <tr>
+                                                <td class="vi-td-mono vi-faint">@GetStr(p, "date", "day", "hour", "bucket")</td>
+                                                <td class="vi-td-mono">@GetDbl(p, "avg_score", "score", "sentiment").ToString("0.00")</td>
+                                                <td class="vi-td-mono ok">@GetStr(p, "positive")</td>
+                                                <td class="vi-td-mono vi-faint">@GetStr(p, "neutral")</td>
+                                                <td class="vi-td-mono err">@GetStr(p, "negative")</td>
+                                                <td class="vi-td-mono vi-faint">@GetStr(p, "count", "total", "events")</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+
+            <div class="vi-stack">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Country Sentiment Heatmap</span></div>
+                    @if (_sentimentHeatmap is null)
+                    { <div class="vi-empty">No heatmap data</div> }
+                    else
+                    {
+                        var countries = GetArr(_sentimentHeatmap.Value, "countries", "data", "entries");
+                        @if (countries.Count == 0)
+                        {
+                            <div class="vi-empty">No country data</div>
+                        }
+                        else
+                        {
+                            <div class="vi-tbl-wrap">
+                                <table class="vi-table">
+                                    <thead><tr><th>Country</th><th>Sentiment</th><th>Events</th><th>Risk</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var c in countries.Take(40))
+                                        {
+                                            var sent = GetDbl(c, "sentiment", "avg_score", "score");
+                                            <tr>
+                                                <td class="vi-td-title">@GetStr(c, "country", "name")</td>
+                                                <td class="vi-td-mono" style="color:@SentColor(sent);">@sent.ToString("0.00")</td>
+                                                <td class="vi-td-mono vi-faint">@GetStr(c, "count", "events", "total")</td>
+                                                <td class="vi-td-mono vi-faint">@GetStr(c, "risk_level", "risk")</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    readonly string[] _tabs = ["Escalation", "Bot Scores", "Credibility", "Causality", "Community", "Influence", "Sentiment"];
+    string _tab = "Escalation";
+    bool _loading;
+    bool _communityFailed;
+
+    // Per-tab cache: skip re-fetch when switching unless user hits Refresh
+    readonly HashSet<string> _loaded = new();
+
+    EscalationResponse?      _escalation;
+    BotScoresResponse?       _botScores;
+    CredibilityResponse?     _credibility;
+    CausalityResponse?       _causality;
+    CommunityGraphResponse?  _community;
+    JsonElement?             _influenceActors;
+    JsonElement?             _propaganda;
+    JsonElement?             _herd;
+    JsonElement?             _sentimentTimeline;
+    JsonElement?             _sentimentHeatmap;
+
+    int _botWindowHours = 24;
+    int _communityHours = 48;
+    string _causalA = "conflict_events";
+    string _causalB = "social_volume";
+    int _causalLag = 48;
+
+    readonly string[] _series =
+    [
+        "conflict_events", "market_volatility", "narrative_intensity",
+        "aircraft_activity", "vessel_activity", "social_volume"
+    ];
+
+    protected override async Task OnInitializedAsync() => await LoadActiveTabAsync();
+
+    async Task SetTab(string t)
+    {
+        _tab = t;
+        // Only fetch if not already loaded; Causality/BotScores always re-run (user-driven)
+        if (!_loaded.Contains(t) || t is "Causality" or "Bot Scores")
+            await LoadActiveTabAsync();
+    }
+
+    async Task LoadActiveTabAsync()
+    {
+        _loading = true;
+        try
+        {
+            switch (_tab)
+            {
+                case "Escalation":  await LoadEscalationAsync(); break;
+                case "Bot Scores":  await LoadBotScoresAsync(); break;
+                case "Credibility": await LoadCredibilityAsync(); break;
+                case "Causality":   await LoadCausalityAsync(); break;
+                case "Community":   await LoadCommunityAsync(); break;
+                case "Influence":   await LoadInfluenceAsync(); break;
+                case "Sentiment":   await LoadSentimentAsync(); break;
+            }
+        }
+        finally { _loading = false; }
+    }
+
+    // Explicit refresh: clear cache for current tab then reload
+    async Task RefreshTabAsync()
+    {
+        _loaded.Remove(_tab);
+        await LoadActiveTabAsync();
+    }
+
+    async Task LoadEscalationAsync()
+    {
+        try
+        {
+            _escalation = await Api.GetEscalationScoresAsync();
+            _loaded.Add("Escalation");
+        }
+        catch (Exception ex) { Toast.ShowError($"Escalation unavailable: {ex.Message}"); }
+    }
+
+    async Task LoadBotScoresAsync()
+    {
+        _loading = true;
+        try
+        {
+            _botScores = await Api.GetBotScoresAsync(_botWindowHours, 50);
+            _loaded.Add("Bot Scores");
+        }
+        catch (Exception ex) { Toast.ShowError($"Bot scores unavailable: {ex.Message}"); }
+        finally { _loading = false; }
+    }
+
+    async Task LoadCredibilityAsync()
+    {
+        try
+        {
+            _credibility = await Api.GetCredibilityAsync();
+            _loaded.Add("Credibility");
+        }
+        catch (Exception ex) { Toast.ShowError($"Credibility unavailable: {ex.Message}"); }
+    }
+
+    async Task LoadCausalityAsync()
+    {
+        _loading = true;
+        try
+        {
+            _causality = await Api.GetCausalityAsync(_causalA, _causalB, _causalLag);
+            _loaded.Add("Causality");
+        }
+        catch (Exception ex) { Toast.ShowError($"Causality unavailable: {ex.Message}"); }
+        finally { _loading = false; }
+    }
+
+    async Task LoadCommunityAsync()
+    {
+        _loading = true;
+        _communityFailed = false;
+        try
+        {
+            _community = await Api.GetCommunityGraphAsync(_communityHours);
+            _loaded.Add("Community");
+        }
+        catch (Exception ex)
+        {
+            _communityFailed = true;
+            Toast.ShowError($"Community graph unavailable: {ex.Message}");
+        }
+        finally { _loading = false; }
+    }
+
+    async Task ReloadCommunityAsync()
+    {
+        _loaded.Remove("Community");
+        await LoadCommunityAsync();
+    }
+
+    async Task LoadInfluenceAsync()
+    {
+        try
+        {
+            var t1 = Api.GetInfluenceActorsAsync(20);
+            var t2 = Api.GetInfluencePropagandaAsync(6);
+            var t3 = Api.GetInfluenceHerdAsync(6);
+            await Task.WhenAll(t1, t2, t3);
+            _influenceActors = t1.Result;
+            _propaganda      = t2.Result;
+            _herd            = t3.Result;
+            _loaded.Add("Influence");
+        }
+        catch (Exception ex) { Toast.ShowError($"Influence unavailable: {ex.Message}"); }
+    }
+
+    async Task LoadSentimentAsync()
+    {
+        try
+        {
+            var t1 = Api.GetSentimentTimelineAsync(days: 7);
+            var t2 = Api.GetSentimentCountryHeatmapAsync(3);
+            await Task.WhenAll(t1, t2);
+            _sentimentTimeline = t1.Result;
+            _sentimentHeatmap  = t2.Result;
+            _loaded.Add("Sentiment");
+        }
+        catch (Exception ex) { Toast.ShowError($"Sentiment unavailable: {ex.Message}"); }
+    }
+
+    // JsonElement helpers for dynamic responses
+    static string GetStr(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v))
+                return v.ValueKind == JsonValueKind.String ? v.GetString() ?? "--" : v.ToString();
+        return "--";
+    }
+
+    static double GetDbl(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number)
+                return v.GetDouble();
+        return 0;
+    }
+
+    static List<JsonElement> GetArr(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Array)
+                return v.EnumerateArray().ToList();
+        return new();
+    }
+
+    List<JsonElement> GetInfluenceActors()
+    {
+        if (_influenceActors is null) return new();
+        return GetArr(_influenceActors.Value, "actors");
+    }
+
+    static string RiskCls(string? r) => r?.ToLowerInvariant() switch
+    {
+        "critical" or "high" => "err",
+        "medium"             => "warn",
+        "low"                => "ok",
+        _                    => ""
+    };
+
+    static string ScoreColor(double v) =>
+        v >= 0.7 ? "var(--err)" : v >= 0.4 ? "var(--warn)" : "var(--ok)";
+
+    static string SentColor(double v) =>
+        v >= 0.6 ? "var(--ok)" : v < 0.4 ? "var(--err)" : "var(--t2)";
+}

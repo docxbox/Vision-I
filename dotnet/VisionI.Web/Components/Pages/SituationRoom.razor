@@ -1,0 +1,359 @@
+@page "/situation/{Slug}"
+@layout AnalystLayout
+@inject WorkspaceService WorkspaceSvc
+@inject NavigationManager Nav
+
+<PageTitle>Situation Room | @(Topic ?? Slug) | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <!-- HEADER -->
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">
+                <button class="vi-btn sm" @onclick='() => Nav.NavigateTo("/threatboard")'
+                        style="padding:2px 8px;font-size:10px;margin-right:6px;">
+                    <span class="material-symbols-outlined" style="font-size:11px;vertical-align:middle;">arrow_back</span>
+                    Threat Board
+                </button>
+                Assess / Situation Room
+            </div>
+            <h1 class="vi-h1">@(Topic ?? Slug)</h1>
+            <div class="vi-sub">CRISIS OVERVIEW · DEVELOPMENTS · ENTITY TRACKING</div>
+        </div>
+        <div class="vi-page-actions">
+            @if (_workspace is not null)
+            {
+                <span class="vi-chip faint" style="font-size:10px;">WORKSPACE</span>
+                <button class="vi-btn sm" @onclick='() => Nav.NavigateTo($"/workspaces/{_workspace.Slug}")'>
+                    Full Analysis
+                </button>
+            }
+            else
+            {
+                <button class="vi-btn sm" @onclick="CreateWorkspaceAsync"
+                        disabled="@_creating" style="font-size:11px;">
+                    + Create Workspace
+                </button>
+            }
+            <button class="vi-btn" disabled="@_loading" @onclick="LoadAllAsync">Refresh</button>
+        </div>
+    </div>
+
+    @if (_loading && _overview is null)
+    {
+        <div class="vi-loading">BUILDING SITUATION PICTURE</div>
+    }
+    else if (!string.IsNullOrWhiteSpace(_error) && _overview is null)
+    {
+        <div class="vi-err">@_error</div>
+    }
+    else
+    {
+        <!-- STATS ROW -->
+        <div class="vi-metrics">
+            <div class="vi-metric">
+                <div class="vi-metric-label">Events</div>
+                <div class="vi-metric-val accent">@(_overview?.EventCount ?? _developments?.EventCount ?? 0)</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Max Risk</div>
+                <div class="vi-metric-val warn">@((_overview?.MaxRiskScore ?? 0).ToString("F1"))</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Narratives</div>
+                <div class="vi-metric-val info">@(_overview?.NarrativeCount ?? _correlation?.NarrativeCount ?? 0)</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Entities</div>
+                <div class="vi-metric-val accent">@(_entities?.EntityCount ?? 0)</div>
+            </div>
+        </div>
+
+        <!-- MAIN GRID -->
+        <div class="vi-sit-grid">
+
+            <!-- LEFT: BRIEF + DEVELOPMENTS -->
+            <div class="vi-sit-left">
+
+                @if (_overview?.SummaryBullets?.Any() == true)
+                {
+                    <div class="vi-card" style="margin-bottom:12px;">
+                        <div class="vi-card-hdr">
+                            <span class="material-symbols-outlined" style="font-size:14px;">summarize</span>
+                            SITUATION BRIEF
+                        </div>
+                        <ul class="vi-sit-bullets">
+                            @foreach (var b in _overview.SummaryBullets)
+                            {
+                                <li>@b</li>
+                            }
+                        </ul>
+                    </div>
+                }
+
+                <div class="vi-card">
+                    <div class="vi-card-hdr" style="margin-bottom:8px;">
+                        <span class="material-symbols-outlined" style="font-size:14px;">breaking_news</span>
+                        RECENT DEVELOPMENTS
+                        <span class="vi-faint" style="font-size:10px;margin-left:auto;">
+                            @(_developments?.EventCount ?? _overview?.TopEvents.Count ?? 0) events
+                        </span>
+                    </div>
+
+                    @{
+                        var events = _developments?.Events ?? _overview?.TopEvents ?? new();
+                    }
+                    @if (!events.Any())
+                    {
+                        <div class="vi-empty" style="padding:16px;">No developments recorded in this window.</div>
+                    }
+                    else
+                    {
+                        <div class="vi-sit-events">
+                            @foreach (var ev in events.Take(15))
+                            {
+                                <div class="vi-sit-event" @onclick='() => Nav.NavigateTo($"/events/{ev.EventId}")'>
+                                    <div class="vi-sit-event-meta">
+                                        <span class="vi-chip @RiskClass(ev.RiskScore)" style="font-size:9px;padding:1px 4px;">
+                                            @(ev.RiskScore?.ToString("F1") ?? "—")
+                                        </span>
+                                        <span class="vi-td-mono" style="font-size:10px;color:var(--tf);">
+                                            @FormatTime(ev.Timestamp)
+                                        </span>
+                                        @if (!string.IsNullOrEmpty(ev.Source))
+                                        {
+                                            <span class="vi-chip" style="font-size:9px;padding:1px 4px;">@ev.Source.ToUpperInvariant()</span>
+                                        }
+                                    </div>
+                                    <div class="vi-sit-event-title">@ev.Title</div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+
+            </div>
+
+            <!-- RIGHT: ACTORS + ACTIONS + SIGNALS -->
+            <div class="vi-sit-right">
+
+                @if (_entities?.EntityItems?.Any() == true)
+                {
+                    <div class="vi-card" style="margin-bottom:12px;">
+                        <div class="vi-card-hdr">
+                            <span class="material-symbols-outlined" style="font-size:14px;">groups</span>
+                            KEY ACTORS
+                        </div>
+                        <div class="vi-sit-actors">
+                            @foreach (var e in _entities.EntityItems.Take(8))
+                            {
+                                <div class="vi-sit-actor">
+                                    <span class="vi-sit-actor-name">@e.Name</span>
+                                    <div style="display:flex;gap:4px;align-items:center;">
+                                        @if (!string.IsNullOrEmpty(e.EntityType))
+                                        {
+                                            <span class="vi-chip" style="font-size:9px;padding:1px 4px;">@e.EntityType.ToUpperInvariant()</span>
+                                        }
+                                        <span class="vi-td-mono vi-faint" style="font-size:10px;">×@e.Count</span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                @if (_actions?.ActionItems?.Any() == true)
+                {
+                    <div class="vi-card" style="margin-bottom:12px;">
+                        <div class="vi-card-hdr">
+                            <span class="material-symbols-outlined" style="font-size:14px;">task_alt</span>
+                            RECOMMENDED ACTIONS
+                        </div>
+                        <div class="vi-sit-actions">
+                            @foreach (var a in _actions.ActionItems.Take(4))
+                            {
+                                <div class="vi-sit-action">
+                                    <span class="vi-chip @ActionClass(a.Priority)" style="font-size:9px;padding:1px 5px;">
+                                        @a.Priority.ToUpperInvariant()
+                                    </span>
+                                    <div>
+                                        <div style="font-size:11px;font-weight:600;color:var(--t);">@a.Title</div>
+                                        <div class="vi-faint" style="font-size:10px;margin-top:2px;">@a.Rationale</div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                @if (_correlation?.SignalClusters?.Any() == true)
+                {
+                    <div class="vi-card" style="margin-bottom:12px;">
+                        <div class="vi-card-hdr">
+                            <span class="material-symbols-outlined" style="font-size:14px;">hub</span>
+                            SIGNAL CLUSTERS
+                        </div>
+                        <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;">
+                            @foreach (var c in _correlation.SignalClusters.Take(12))
+                            {
+                                <span class="vi-chip info" style="font-size:10px;cursor:default;"
+                                      title="@c.Count events">
+                                    @c.Tag.Replace("_"," ").ToUpperInvariant()
+                                    <span class="vi-faint" style="margin-left:3px;">@c.Count</span>
+                                </span>
+                            }
+                        </div>
+                    </div>
+                }
+
+                @if (_workspace is null)
+                {
+                    <div class="vi-card" style="border:1px dashed var(--bdr);background:transparent;">
+                        <div class="vi-card-hdr">
+                            <span class="material-symbols-outlined" style="font-size:14px;">workspaces</span>
+                            DEEPEN ANALYSIS
+                        </div>
+                        <div class="vi-faint" style="font-size:11px;margin:6px 0 10px;">
+                            Create a dedicated workspace to unlock map tracking, asset monitoring, social sentiment, and decision logging for this situation.
+                        </div>
+                        <button class="vi-btn primary sm" @onclick="CreateWorkspaceAsync"
+                                disabled="@_creating" style="width:100%;">
+                            @(_creating ? "Creating…" : $"+ Create Workspace: {Topic ?? Slug}")
+                        </button>
+                    </div>
+                }
+
+            </div>
+        </div>
+
+        @if (_correlation?.Narratives?.Any() == true)
+        {
+            <div class="vi-card" style="margin-top:12px;">
+                <div class="vi-card-hdr">
+                    <span class="material-symbols-outlined" style="font-size:14px;">account_tree</span>
+                    NARRATIVE LINKS
+                    <span class="vi-faint" style="font-size:10px;margin-left:auto;">@_correlation.NarrativeCount narratives · @_correlation.ClusterCount clusters</span>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
+                    @foreach (var n in _correlation.Narratives.Take(20))
+                    {
+                        <div class="vi-chip" style="font-size:10px;display:flex;gap:4px;align-items:center;padding:3px 7px;">
+                            <span class="vi-faint">@n.Source</span>
+                            <span style="color:var(--tm);">@n.Rel</span>
+                            <span>@n.Target</span>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public string Slug { get; set; } = "";
+    [SupplyParameterFromQuery] public string? Topic { get; set; }
+
+    WorkspaceDetailModel?  _workspace;
+    WorkspaceOverview?     _overview;
+    WorkspaceDevelopments? _developments;
+    WorkspaceEntities?     _entities;
+    WorkspaceActions?      _actions;
+    WorkspaceCorrelation?  _correlation;
+
+    bool   _loading  = true;
+    bool   _creating = false;
+    string _error    = "";
+
+    protected override async Task OnInitializedAsync() => await LoadAllAsync();
+
+    async Task LoadAllAsync()
+    {
+        _loading = true;
+        _error   = "";
+        StateHasChanged();
+
+        try
+        {
+            _workspace = await WorkspaceSvc.GetWorkspaceAsync(Slug);
+            if (_workspace is not null)
+            {
+                var s = _workspace.Slug;
+                await Task.WhenAll(
+                    WorkspaceSvc.GetWorkspaceOverviewAsync(s).ContinueWith(t => { if (!t.IsFaulted) _overview = t.Result; }),
+                    WorkspaceSvc.GetWorkspaceDevelopmentsAsync(s).ContinueWith(t => { if (!t.IsFaulted) _developments = t.Result; }),
+                    WorkspaceSvc.GetWorkspaceEntitiesAsync(s).ContinueWith(t => { if (!t.IsFaulted) _entities = t.Result; }),
+                    WorkspaceSvc.GetWorkspaceActionsAsync(s).ContinueWith(t => { if (!t.IsFaulted) _actions = t.Result; }),
+                    WorkspaceSvc.GetWorkspaceCorrelationAsync(s).ContinueWith(t => { if (!t.IsFaulted) _correlation = t.Result; })
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    async Task CreateWorkspaceAsync()
+    {
+        _creating = true;
+        StateHasChanged();
+        try
+        {
+            var title = Topic ?? Slug.Replace("-", " ").ToUpperInvariant();
+            var req   = new CreateWorkspaceRequest(
+                Slug:                 Slug,
+                Title:                title,
+                Description:          $"Auto-created from Situation Room: {title}",
+                Classification:       "UNCLASSIFIED",
+                DefaultWindowHours:   24,
+                Queries:              string.IsNullOrWhiteSpace(Topic) ? null
+                    : [new QueryRequest(Topic, Priority: 100)]
+            );
+            var (ws, err) = await WorkspaceSvc.CreateWorkspaceWithErrorAsync(req);
+            if (ws is not null)
+            {
+                Nav.NavigateTo($"/workspaces/{ws.Slug}");
+                return;
+            }
+            _error = err ?? "Failed to create workspace.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _creating = false;
+            StateHasChanged();
+        }
+    }
+
+    static string RiskClass(double? risk) => risk switch
+    {
+        >= 0.8 => "crit",
+        >= 0.6 => "warn",
+        >= 0.4 => "info",
+        _      => "faint"
+    };
+
+    static string ActionClass(string? priority) => priority?.ToLower() switch
+    {
+        "high"     => "warn",
+        "critical" => "crit",
+        "medium"   => "info",
+        _          => "faint"
+    };
+
+    static string FormatTime(string? ts)
+    {
+        if (string.IsNullOrEmpty(ts)) return "—";
+        return DateTime.TryParse(ts, out var dt)
+            ? dt.ToUniversalTime().ToString("HH:mm")
+            : ts[..Math.Min(5, ts.Length)];
+    }
+}

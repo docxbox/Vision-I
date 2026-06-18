@@ -1,0 +1,262 @@
+@page "/missions"
+@layout AnalystLayout
+@inject HomeService Svc
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>Situations | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Thread / Situations</div>
+            <h1 class="vi-h1">Active Situations</h1>
+            <div class="vi-sub">EVENT CLUSTERING · CASE MANAGEMENT</div>
+        </div>
+        <div class="vi-page-actions">
+            <span class="vi-chip info">@Svc.SituationCases.Count cases</span>
+            <button class="vi-btn" @onclick="() => Svc.RefreshSituationsAsync(true)">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Active Cases</div>
+            <div class="vi-metric-val warn">@Svc.SituationCases.Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Indicators</div>
+            <div class="vi-metric-val accent">@Svc.SituationIndicators.Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Region Signals</div>
+            <div class="vi-metric-val">@Svc.RegionIndicators.Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Narrative Signals</div>
+            <div class="vi-metric-val">@Svc.NarrativeIndicators.Count</div>
+        </div>
+    </div>
+
+    @if (!Svc.SituationCases.Any())
+    {
+        <div class="vi-empty">
+            <span class="material-symbols-outlined">warning</span>
+            No active situations detected. Events are being monitored.
+        </div>
+    }
+    else
+    {
+        <div class="vi-split wide" style="flex:1;min-height:0;">
+            <div class="vi-panel" style="min-height:0;">
+                <div class="vi-panel-hdr">
+                    <span class="vi-panel-title">Situation Cases</span>
+                    <span class="vi-chip warn">@Svc.SituationCases.Count active</span>
+                </div>
+                <div class="vi-tbl-wrap">
+                    <table class="vi-table">
+                        <thead>
+                            <tr>
+                                <th>Situation</th>
+                                <th>Status</th>
+                                <th>Events</th>
+                                <th>Actors</th>
+                                <th>Region</th>
+                                <th>Risk</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var s in Svc.SituationCases)
+                            {
+                                <tr class="@(_selected?.SituationId == s.SituationId ? "sel" : "")"
+                                    style="cursor:pointer;"
+                                    @onclick="() => SelectSituation(s)">
+                                    <td>
+                                        <div class="vi-td-title">@(s.Title ?? s.SituationId)</div>
+                                        @if (!string.IsNullOrWhiteSpace(s.Description))
+                                        {
+                                            <div class="vi-td-note vi-trunc" style="max-width:260px;">@s.Description</div>
+                                        }
+                                    </td>
+                                    <td><span class="vi-chip warn">@(s.Status?.ToUpperInvariant() ?? "ACTIVE")</span></td>
+                                    <td class="vi-td-mono">@s.EventCount</td>
+                                    <td class="vi-td-mono">@s.ActorIds.Count</td>
+                                    <td class="vi-td-mono">@(s.Region ?? "—")</td>
+                                    <td><span class="vi-chip @RiskCls(s.RiskScore)">@(s.RiskScore.ToString("0.0"))</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Situation detail + drill-down -->
+            <div class="vi-stack">
+                @if (_selected is { } sel)
+                {
+                    <div class="vi-panel soft">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title vi-trunc">@(sel.Title ?? sel.SituationId)</span>
+                            <span class="vi-chip @RiskCls(sel.RiskScore)">@sel.RiskScore.ToString("0.0")</span>
+                        </div>
+                        <div class="vi-panel-body vi-stack">
+                            <div class="vi-detail">
+                                <div class="vi-detail-row">
+                                    <span class="vi-detail-key">Status</span>
+                                    <span class="vi-detail-val"><span class="vi-chip warn">@(sel.Status?.ToUpperInvariant() ?? "ACTIVE")</span></span>
+                                </div>
+                                <div class="vi-detail-row">
+                                    <span class="vi-detail-key">Region</span>
+                                    <span class="vi-detail-val">@(sel.Region ?? "—")</span>
+                                </div>
+                                <div class="vi-detail-row">
+                                    <span class="vi-detail-key">Events</span>
+                                    <span class="vi-detail-val accent">@sel.EventCount</span>
+                                </div>
+                                <div class="vi-detail-row">
+                                    <span class="vi-detail-key">Actors</span>
+                                    <span class="vi-detail-val">@sel.ActorIds.Count</span>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(sel.DetectedAt))
+                                {
+                                    <div class="vi-detail-row">
+                                        <span class="vi-detail-key">Detected</span>
+                                        <span class="vi-detail-val vi-mono vi-faint">@FmtTime(sel.DetectedAt)</span>
+                                    </div>
+                                }
+                            </div>
+
+                            @if (!string.IsNullOrWhiteSpace(sel.Description))
+                            {
+                                <div>
+                                    <div class="vi-label">Description</div>
+                                    <div style="font-size:13px;color:var(--t2);line-height:1.6;">@sel.Description</div>
+                                </div>
+                            }
+
+                            @if (sel.Indicator is { } ind && !string.IsNullOrWhiteSpace(ind.AssessmentSummary))
+                            {
+                                <div class="vi-panel" style="background:rgba(96,165,250,.06);border-left:2px solid var(--accent);padding:8px;">
+                                    <div class="vi-label" style="margin-bottom:3px;">Assessment</div>
+                                    <div style="font-size:12px;color:var(--t2);line-height:1.5;">@ind.AssessmentSummary</div>
+                                </div>
+                            }
+
+                            @if (sel.Indicator is { } ind2 && !string.IsNullOrWhiteSpace(ind2.RecommendedAction))
+                            {
+                                <div>
+                                    <div class="vi-label">Recommended Action</div>
+                                    <div style="font-size:13px;color:var(--p2);font-weight:500;">@ind2.RecommendedAction</div>
+                                </div>
+                            }
+
+                            @if (sel.ActorIds.Any())
+                            {
+                                <div>
+                                    <div class="vi-label">Actors</div>
+                                    <div class="vi-tags">
+                                        @foreach (var a in sel.ActorIds.Take(8))
+                                        {
+                                            <span class="vi-chip info">@a</span>
+                                        }
+                                    </div>
+                                </div>
+                            }
+
+                            <!-- Drill-down actions -->
+                            <div class="vi-row" style="gap:6px;flex-wrap:wrap;margin-top:4px;">
+                                <button class="vi-btn primary" @onclick="OpenInOperations">
+                                    Operations →
+                                </button>
+                                <a class="vi-btn sm" href="/triage">Triage →</a>
+                                @if (sel.EventIds.Any())
+                                {
+                                    <a class="vi-btn sm" href="/events/@Uri.EscapeDataString(sel.EventIds.First())">Lead Event →</a>
+                                }
+                                <a class="vi-btn sm" href="/graph">Graph →</a>
+                            </div>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    @if (Svc.SituationIndicators.Any())
+                    {
+                        <div class="vi-panel soft">
+                            <div class="vi-panel-hdr"><span class="vi-panel-title">Situation Indicators</span></div>
+                            <div class="vi-panel-body vi-stack">
+                                @foreach (var ind in Svc.SituationIndicators.Take(6))
+                                {
+                                    <div class="vi-item" style="padding:6px 8px;cursor:default;">
+                                        <div class="vi-item-main">
+                                            <div class="vi-item-title vi-trunc">@ind.Driver</div>
+                                            <div class="vi-item-meta">
+                                                <span class="vi-chip @StatusCls(ind.Severity)">@(ind.Severity?.ToUpperInvariant() ?? "—")</span>
+                                                <span>@ind.RecommendedAction</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+
+                    @if (Svc.AlertIndicators.Any())
+                    {
+                        <div class="vi-panel soft">
+                            <div class="vi-panel-hdr"><span class="vi-panel-title">Alert Indicators</span></div>
+                            <div class="vi-panel-body vi-stack">
+                                @foreach (var ind in Svc.AlertIndicators.Take(5))
+                                {
+                                    <div class="vi-kv">
+                                        <span class="vi-kv-key vi-trunc">@ind.Driver</span>
+                                        <span class="vi-chip @StatusCls(ind.Severity)">@(ind.Severity?.ToUpperInvariant() ?? "—")</span>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+
+                    <div class="vi-faint" style="font-size:12px;padding:8px;">Select a situation row to inspect and act.</div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    DetectedSituationDto? _selected;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    void SelectSituation(DetectedSituationDto s)
+        => _selected = _selected?.SituationId == s.SituationId ? null : s;
+
+    void OpenInOperations()
+    {
+        if (_selected?.SituationId is not { } id) return;
+        Nav.NavigateTo($"/operations?situation={Uri.EscapeDataString(id)}");
+    }
+
+    static string RiskCls(double v) => v switch { > 0.7 => "err", > 0.4 => "warn", _ => "" };
+
+    static string StatusCls(string? s) => s?.ToLower() switch
+    {
+        "critical" => "err", "high" => "warn", "escalated" => "warn",
+        "ok" or "resolved" => "ok", _ => ""
+    };
+
+    static string FmtTime(string? ts)
+    {
+        if (string.IsNullOrWhiteSpace(ts)) return "--";
+        return ts.Length >= 16 ? ts[..16].Replace("T", " ") : ts;
+    }
+
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+}

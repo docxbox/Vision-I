@@ -1,0 +1,877 @@
+@page "/overview"
+@layout MainLayout
+@inject ApiService Api
+@inject HomeService Home
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@implements IAsyncDisposable
+@using System.Text.Json
+@using VisionI.Web.Models
+
+<PageTitle>Overview | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Vision-I / Executive</div>
+            <h1 class="vi-h1">System Overview</h1>
+            <div class="vi-sub">GLOBAL INTELLIGENCE STATUS · @_generatedAt</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" disabled="@_loading" @onclick="LoadAllAsync">
+                <span class="material-symbols-outlined" style="font-size:15px;">refresh</span>
+                Refresh
+            </button>
+            <a class="vi-btn" href="/map">Open Map</a>
+            <a class="vi-btn" href="/workspaces">Workspaces</a>
+        </div>
+    </div>
+
+    @if (_loading && _totalEvents == 0)
+    {
+        <div class="vi-loading">LOADING INTELLIGENCE PICTURE</div>
+    }
+    else
+    {
+        <div class="vi-metrics" style="margin-bottom:16px;">
+            <div class="vi-metric">
+                <div class="vi-metric-label">Total Events</div>
+                <div class="vi-metric-val accent">@_totalEvents.ToString("N0")</div>
+                <div class="vi-metric-note">all time</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Active Alerts</div>
+                <div class="vi-metric-val @(_activeAlerts > 0 ? "err" : "ok")">@_activeAlerts</div>
+                <div class="vi-metric-note">unacknowledged</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">High Risk</div>
+                <div class="vi-metric-val @(_highRisk > 0 ? "err" : "ok")">@_highRisk</div>
+                <div class="vi-metric-note">events ≥ 0.7</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Narratives</div>
+                <div class="vi-metric-val warn">@_narrativeCount</div>
+                <div class="vi-metric-note">active watch signals</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Sources</div>
+                <div class="vi-metric-val">@_healthySources / @_totalSources</div>
+                <div class="vi-metric-note">healthy</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Delta 6h</div>
+                <div class="vi-metric-val @(_deltaDir == "up" ? "err" : _deltaDir == "down" ? "ok" : "")">
+                    @(_deltaNewEvents > 0 ? $"+{_deltaNewEvents}" : _deltaNewEvents.ToString())
+                </div>
+                <div class="vi-metric-note">new events</div>
+            </div>
+        </div>
+
+        @if (_deltaNewEvents > 10 || _deltaNewAlerts > 0)
+        {
+            <div style="margin-bottom:12px;padding:10px 14px;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.2);border-radius:6px;display:flex;align-items:center;gap:10px;">
+                <span class="material-symbols-outlined" style="color:var(--err);font-size:16px;">trending_up</span>
+                <span style="font-size:12px;color:var(--t2);">
+                    Last 6h: <strong>@_deltaNewEvents</strong> new events, <strong>@_deltaNewAlerts</strong> new alerts.
+                    @if (!string.IsNullOrEmpty(_deltaSummary))
+                    {
+                        <span> @_deltaSummary</span>
+                    }
+                </span>
+            </div>
+        }
+
+        <div class="vi-panel vi-overview-map-panel" style="margin-bottom:16px;overflow:hidden;">
+            <div class="vi-panel-hdr">
+                <span class="vi-panel-title">Global Theater</span>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <span class="vi-chip info">@_mapEventCount mapped events</span>
+                    <span class="vi-chip">@_mapAssetCount moving assets</span>
+                    <a class="vi-btn sm" href="/map">Full Screen</a>
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:minmax(0,1.6fr) 320px;gap:0;min-height:420px;">
+                <div id="overview-map" class="vi-overview-map"></div>
+                <div style="border-left:1px solid var(--bd);display:flex;flex-direction:column;background:linear-gradient(180deg, rgba(17,24,39,.92), rgba(10,13,20,.95));">
+                    <div style="padding:14px 16px;border-bottom:1px solid var(--bd);">
+                        <div class="vi-kicker" style="margin-bottom:8px;">Operational Pulse</div>
+                        <div class="vi-stack" style="gap:8px;">
+                            <div class="vi-kv">
+                                <span class="vi-kv-key">Lead Region</span>
+                                <span class="vi-chip @RiskCls(_leadRegionScore)">@(_leadRegionName ?? "Global")</span>
+                            </div>
+                            <div style="font-size:12px;color:var(--t2);line-height:1.5;">@_leadRegionSummary</div>
+                        </div>
+                    </div>
+
+                    <div style="padding:14px 16px;border-bottom:1px solid var(--bd);">
+                        <div class="vi-kicker" style="margin-bottom:8px;">Top Hotspots</div>
+                        @if (_hotspots.Any())
+                        {
+                            <div class="vi-stack" style="gap:6px;">
+                                @foreach (var hotspot in _hotspots)
+                                {
+                                    <button class="vi-kv" style="background:none;border:none;padding:0;text-align:left;cursor:pointer;"
+                                            @onclick="() => OpenRegion(hotspot.Region)">
+                                        <span class="vi-kv-key vi-trunc">@hotspot.Region</span>
+                                        <span class="vi-chip @RiskCls(hotspot.Score)">@hotspot.Score.ToString("0.00")</span>
+                                    </button>
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <div style="font-size:12px;color:var(--tf);">Hotspot resolution is still warming.</div>
+                        }
+                    </div>
+
+                    <div style="padding:14px 16px;flex:1;overflow:auto;">
+                        <div class="vi-kicker" style="margin-bottom:8px;">Live Assets</div>
+                        @if (_geoAssets.Any())
+                        {
+                            <div class="vi-stack" style="gap:6px;">
+                                @foreach (var asset in _geoAssets.Take(8))
+                                {
+                                    <button style="background:var(--s2);border:1px solid var(--bd);border-radius:6px;padding:8px 10px;text-align:left;cursor:pointer;"
+                                            @onclick="() => OpenAsset(asset.AssetId)">
+                                        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:4px;">
+                                            <span style="font-size:12px;color:var(--t);font-weight:600;" class="vi-trunc">@(asset.Name ?? asset.Callsign ?? asset.Identifier ?? asset.AssetId)</span>
+                                            <span class="vi-chip" style="font-size:10px;">@(asset.AssetType ?? "asset")</span>
+                                        </div>
+                                        <div style="font-size:10px;color:var(--tf);font-family:var(--mono);">
+                                            @(asset.LastLat?.ToString("0.00") ?? "--"), @(asset.LastLon?.ToString("0.00") ?? "--")
+                                            @if (asset.LastSpeed.HasValue)
+                                            {
+                                                <span> · @((int)asset.LastSpeed.Value)kt</span>
+                                            }
+                                        </div>
+                                    </button>
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <div style="font-size:12px;color:var(--tf);">No geo-located assets are in the current state cache.</div>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="vi-split wide">
+            <div class="vi-stack" style="flex:1.5;min-width:0;">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Top Events</span>
+                        <div style="display:flex;gap:6px;align-items:center;">
+                            <span class="vi-chip info">@_topEvents.Count shown</span>
+                            <a class="vi-btn sm" href="/events">All Events</a>
+                        </div>
+                    </div>
+                    @if (!_topEvents.Any())
+                    {
+                        <div class="vi-empty">
+                            <span class="material-symbols-outlined">article</span>
+                            No events loaded
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead>
+                                    <tr>
+                                        <th>Title</th>
+                                        <th>Source</th>
+                                        <th>Type</th>
+                                        <th>Risk</th>
+                                        <th>Time</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var e in _topEvents)
+                                    {
+                                        var rc = e.RiskScore >= 0.9 ? "severity-critical" : e.RiskScore >= 0.7 ? "severity-high" : e.RiskScore >= 0.4 ? "severity-medium" : "severity-low";
+                                        <tr style="cursor:pointer;" @onclick="@(() => OpenEvent(e.EventId))">
+                                            <td><div class="vi-td-title vi-trunc" style="max-width:320px;">@e.Title</div></td>
+                                            <td class="vi-td-mono vi-faint">@(e.Source?.ToUpperInvariant() ?? "--")</td>
+                                            <td><span class="vi-chip" style="font-size:10px;">@(e.EventType ?? "event")</span></td>
+                                            <td><span class="vi-chip @rc" style="font-size:10px;">@e.RiskScore.ToString("0.00")</span></td>
+                                            <td class="vi-td-mono vi-faint" style="font-size:11px;">@FmtAge(e.Timestamp)</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Source Health</span>
+                        <div style="display:flex;gap:6px;align-items:center;">
+                            <span class="vi-chip ok" style="font-size:10px;">@_healthySources HEALTHY</span>
+                            @if (_failingSources > 0)
+                            {
+                                <span class="vi-chip err" style="font-size:10px;">@_failingSources FAILING</span>
+                            }
+                            <a class="vi-btn sm" href="/sources">Manage</a>
+                        </div>
+                    </div>
+                    @if (!_sourceHealth.Any())
+                    {
+                        <div class="vi-empty" style="padding:16px;">No source data</div>
+                    }
+                    else
+                    {
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead>
+                                    <tr><th>Source</th><th>Status</th><th>Records</th><th>Last Check</th></tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var s in _sourceHealth.Take(15))
+                                    {
+                                        <tr>
+                                            <td><div class="vi-td-title">@s.Label</div></td>
+                                            <td><span class="vi-chip @s.StatusClass" style="font-size:10px;">@s.Status</span></td>
+                                            <td class="vi-td-mono vi-faint" style="font-size:11px;">@s.RecordCount.ToString("N0")</td>
+                                            <td class="vi-td-mono vi-faint" style="font-size:11px;">@FmtAge(s.LastChecked)</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <div class="vi-stack" style="width:320px;flex-shrink:0;">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Active Alerts</span>
+                        <a class="vi-btn sm" href="/alerts">All</a>
+                    </div>
+                    @if (!_alerts.Any())
+                    {
+                        <div class="vi-empty" style="padding:16px;">
+                            <span class="material-symbols-outlined">check_circle</span>
+                            No active alerts
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="vi-panel-body vi-stack">
+                            @foreach (var a in _alerts.Take(8))
+                            {
+                                var sc = a.Severity?.ToLowerInvariant() switch { "critical" => "severity-critical", "high" => "severity-high", "medium" => "severity-medium", _ => "severity-low" };
+                                <div style="padding:8px 0;border-bottom:1px solid var(--bd);">
+                                    <div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:3px;">
+                                        <span class="vi-chip @sc" style="font-size:9px;flex-shrink:0;">@(a.Severity?.ToUpperInvariant() ?? "ALERT")</span>
+                                        <span style="font:600 12px/1.3 var(--font);color:var(--t);">@a.Title</span>
+                                    </div>
+                                    @if (!string.IsNullOrEmpty(a.Entity))
+                                    {
+                                        <div style="font-size:11px;color:var(--tf);">@a.Entity</div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                        @if (_activeAlerts > 8)
+                        {
+                            <div style="padding:8px 14px;font-size:11px;color:var(--tf);">+@(_activeAlerts - 8) more alerts</div>
+                        }
+                    }
+                </div>
+
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Narratives</span>
+                        <a class="vi-btn sm" href="/narratives">All</a>
+                    </div>
+                    @if (!_narratives.Any())
+                    {
+                        <div class="vi-empty" style="padding:16px;">No narratives detected</div>
+                    }
+                    else
+                    {
+                        <div class="vi-panel-body vi-stack">
+                            @foreach (var n in _narratives)
+                            {
+                                var sc = n.Severity?.ToLowerInvariant() switch { "critical" => "severity-critical", "high" => "severity-high", "medium" => "severity-medium", _ => "" };
+                                <div style="padding:7px 0;border-bottom:1px solid var(--bd);">
+                                    <div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:2px;">
+                                        @if (!string.IsNullOrEmpty(n.Severity))
+                                        {
+                                            <span class="vi-chip @sc" style="font-size:9px;flex-shrink:0;">@n.Severity.ToUpperInvariant()</span>
+                                        }
+                                        <span style="font:600 12px/1.3 var(--font);color:var(--t);">@n.Label</span>
+                                    </div>
+                                    <div style="font-size:11px;color:var(--tf);">@n.SupportingText</div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private bool _loading = true;
+    private bool _disposed;
+    private bool _mapDirty;
+    private bool _overviewMapInitialized;
+    private string _generatedAt = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm'Z'");
+    private int _totalEvents;
+    private int _activeAlerts;
+    private int _highRisk;
+    private int _narrativeCount;
+    private int _healthySources;
+    private int _totalSources;
+    private int _failingSources;
+    private int _deltaNewEvents;
+    private int _deltaNewAlerts;
+    private int _mapEventCount;
+    private int _mapAssetCount;
+    private string _deltaDir = "flat";
+    private string _deltaSummary = "";
+    private string? _leadRegionName;
+    private string _leadRegionSummary = "No resolved hotspot yet.";
+    private double _leadRegionScore;
+
+    private readonly List<EventItem> _topEvents = [];
+    private readonly List<AlertItem> _alerts = [];
+    private readonly List<SourceItem> _sourceHealth = [];
+    private readonly List<NarrativeItem> _narratives = [];
+    private readonly List<ResolvedEscalationPoint> _hotspots = [];
+    private readonly List<AssetDto> _geoAssets = [];
+
+    private System.Timers.Timer? _refreshTimer;
+    private DotNetObjectReference<Overview>? _mapRef;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Home.OnChanged += OnHomeChanged;
+        ApplyHomeState();
+        await LoadAllAsync(showLoading: true, refreshHomeLayers: false);
+        _ = RefreshHomeLayersAsync(force: false);
+
+        _refreshTimer = new(TimeSpan.FromMinutes(3).TotalMilliseconds) { AutoReset = true };
+        _refreshTimer.Elapsed += async (_, _) =>
+        {
+            if (_disposed) return;
+            await InvokeAsync(() => LoadAllAsync(showLoading: false, refreshHomeLayers: true));
+        };
+        _refreshTimer.Start();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            _mapRef = DotNetObjectReference.Create(this);
+
+        if (_mapDirty)
+        {
+            _mapDirty = false;
+            await RenderGlobalMapAsync();
+        }
+    }
+
+    private async Task LoadAllAsync() => await LoadAllAsync(showLoading: true, refreshHomeLayers: true);
+
+    private async Task LoadAllAsync(bool showLoading, bool refreshHomeLayers)
+    {
+        if (showLoading && _totalEvents == 0)
+            _loading = true;
+        _generatedAt = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm'Z'");
+        await InvokeAsync(StateHasChanged);
+
+        await Task.WhenAll(LoadOverviewAsync(), LoadDeltaAsync());
+
+        ApplyHomeState();
+        _loading = false;
+        await InvokeAsync(StateHasChanged);
+
+        if (refreshHomeLayers)
+            _ = RefreshHomeLayersAsync(force: true);
+    }
+
+    private async Task RefreshHomeLayersAsync(bool force)
+    {
+        try
+        {
+            await Home.EnsureLoadedAsync();
+            await Task.WhenAll(
+                Home.RefreshWatchAsync(force: force),
+                Home.EnsureCountryHeatmapAsync(force: force));
+
+            if (_disposed)
+                return;
+
+            ApplyHomeState();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+            // Keep the overview usable even if a slow enrichment layer is degraded.
+        }
+    }
+
+    private async Task LoadOverviewAsync()
+    {
+        try
+        {
+            var raw = await Api.GetAsync<JsonElement?>("api/overview");
+            if (raw is not { } json)
+            {
+                await EnsureOverviewBottomFallbacksAsync();
+                return;
+            }
+
+            _topEvents.Clear();
+            _alerts.Clear();
+            _sourceHealth.Clear();
+
+            _totalEvents = ReadInt(json, "total_events");
+            _activeAlerts = ReadInt(json, "alert_count");
+            _narrativeCount = Math.Max(_narrativeCount, ReadInt(json, "narrative_count"));
+
+            if (json.TryGetProperty("generated_at", out var generatedAt) && generatedAt.ValueKind == JsonValueKind.String)
+                _generatedAt = generatedAt.GetString() ?? _generatedAt;
+
+            if (json.TryGetProperty("top_events", out var topEvents) && topEvents.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var e in topEvents.EnumerateArray())
+                {
+                    _topEvents.Add(new EventItem(
+                        e.TryGetProperty("event_id", out var eventId) ? eventId.GetString() : null,
+                        e.TryGetProperty("title", out var title) ? title.GetString() : "--",
+                        e.TryGetProperty("source", out var source) ? source.GetString() : null,
+                        e.TryGetProperty("event_type", out var eventType) ? eventType.GetString() : null,
+                        ReadDouble(e, "risk_score"),
+                        e.TryGetProperty("timestamp", out var timestamp) ? timestamp.GetString() : null));
+                }
+            }
+
+            if (json.TryGetProperty("active_alerts", out var activeAlerts) && activeAlerts.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var a in activeAlerts.EnumerateArray())
+                {
+                    _alerts.Add(new AlertItem(
+                        a.TryGetProperty("alert_id", out var alertId) ? alertId.GetString() : null,
+                        a.TryGetProperty("title", out var title) ? title.GetString() : "--",
+                        a.TryGetProperty("severity", out var severity) ? severity.GetString() : null,
+                        a.TryGetProperty("entity", out var entity) ? entity.GetString() : null));
+                }
+            }
+
+            if (json.TryGetProperty("source_health", out var sourceHealth) && sourceHealth.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var s in sourceHealth.EnumerateArray())
+                {
+                    var statusRaw = s.TryGetProperty("status", out var statusProperty) ? statusProperty.GetString() ?? "unknown" : "unknown";
+                    var status = statusRaw.ToUpperInvariant() switch
+                    {
+                        "OK" => "HEALTHY",
+                        "DEGRADED" => "DEGRADED",
+                        "ERROR" => "FAILING",
+                        _ => statusRaw.ToUpperInvariant()
+                    };
+
+                    _sourceHealth.Add(new SourceItem(
+                        Label: HumanizeKey(s.TryGetProperty("source_name", out var sourceName) ? sourceName.GetString() : null),
+                        Status: status,
+                        StatusClass: status switch
+                        {
+                            "HEALTHY" => "ok",
+                            "DEGRADED" => "warn",
+                            "FAILING" => "err",
+                            _ => ""
+                        },
+                        RecordCount: ReadInt(s, "record_count"),
+                        LastChecked: s.TryGetProperty("last_checked", out var lastChecked) ? lastChecked.GetString() : null));
+                }
+            }
+
+            _totalSources = _sourceHealth.Count;
+            _healthySources = _sourceHealth.Count(x => x.Status == "HEALTHY");
+            _failingSources = _sourceHealth.Count(x => x.Status == "FAILING");
+
+            await EnsureOverviewBottomFallbacksAsync();
+        }
+        catch
+        {
+            await EnsureOverviewBottomFallbacksAsync();
+        }
+    }
+
+    private async Task EnsureOverviewBottomFallbacksAsync()
+    {
+        if (!_topEvents.Any())
+            await LoadTopEventsFallbackAsync();
+
+        if (!_sourceHealth.Any())
+            await LoadSourceHealthFallbackAsync();
+
+        _totalSources = _sourceHealth.Count;
+        _healthySources = _sourceHealth.Count(x => x.Status == "HEALTHY");
+        _failingSources = _sourceHealth.Count(x => x.Status == "FAILING");
+    }
+
+    private async Task LoadTopEventsFallbackAsync()
+    {
+        try
+        {
+            var raw = await Api.GetAsync<JsonElement?>("api/events?limit=12&offset=0&sort_by=risk_score");
+            if (raw is not { } json || !json.TryGetProperty("events", out var events) || events.ValueKind != JsonValueKind.Array)
+                return;
+
+            foreach (var e in events.EnumerateArray())
+            {
+                _topEvents.Add(new EventItem(
+                    e.TryGetProperty("event_id", out var eventId) ? eventId.GetString() : null,
+                    e.TryGetProperty("title", out var title) ? title.GetString() : "--",
+                    e.TryGetProperty("source", out var source) ? source.GetString() : null,
+                    e.TryGetProperty("event_type", out var eventType) ? eventType.GetString() : null,
+                    ReadDouble(e, "risk_score"),
+                    e.TryGetProperty("timestamp", out var timestamp) ? timestamp.GetString() : null));
+            }
+        }
+        catch { }
+    }
+
+    private async Task LoadSourceHealthFallbackAsync()
+    {
+        try
+        {
+            var eventSources = await Api.GetAsync<JsonElement?>("api/events/sources?limit=40");
+            if (eventSources is { ValueKind: JsonValueKind.Object } sourceJson &&
+                sourceJson.TryGetProperty("sources", out var sourceArr) &&
+                sourceArr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var s in sourceArr.EnumerateArray().Take(18))
+                {
+                    var source = s.TryGetProperty("source", out var sourceName) ? sourceName.GetString() : null;
+                    if (string.IsNullOrWhiteSpace(source))
+                        continue;
+
+                    _sourceHealth.Add(new SourceItem(
+                        Label: HumanizeKey(source),
+                        Status: "ACTIVE",
+                        StatusClass: "ok",
+                        RecordCount: ReadInt(s, "count"),
+                        LastChecked: s.TryGetProperty("latest", out var latest) ? latest.GetString() : null));
+                }
+
+                if (_sourceHealth.Any())
+                    return;
+            }
+
+            var raw = await Api.GetAsync<JsonElement?>("api/sources/catalog");
+            if (raw is not { } json)
+                return;
+
+            JsonElement sources;
+            if (json.ValueKind == JsonValueKind.Array)
+                sources = json;
+            else if (!json.TryGetProperty("sources", out sources) || sources.ValueKind != JsonValueKind.Array)
+                return;
+
+            foreach (var s in sources.EnumerateArray().Take(18))
+            {
+                var health = s.TryGetProperty("health", out var h) && h.ValueKind == JsonValueKind.Object ? h : s;
+                var rawStatus = health.TryGetProperty("status", out var statusProp) ? statusProp.GetString() ?? "unknown" : "unknown";
+                var status = rawStatus.ToUpperInvariant() switch
+                {
+                    "OK" or "HEALTHY" => "HEALTHY",
+                    "NOT_CONFIGURED" => "NOT CONFIGURED",
+                    "ERROR" or "DOWN" => "FAILING",
+                    "DEGRADED" => "DEGRADED",
+                    _ => rawStatus.ToUpperInvariant()
+                };
+
+                _sourceHealth.Add(new SourceItem(
+                    Label: HumanizeKey(
+                        s.TryGetProperty("label", out var label) ? label.GetString() :
+                        s.TryGetProperty("source_name", out var sourceName) ? sourceName.GetString() :
+                        s.TryGetProperty("key", out var key) ? key.GetString() : null),
+                    Status: status,
+                    StatusClass: status switch
+                    {
+                        "HEALTHY" => "ok",
+                        "DEGRADED" => "warn",
+                        "FAILING" => "err",
+                        "NOT CONFIGURED" => "warn",
+                        _ => ""
+                    },
+                    RecordCount: ReadInt(health, "record_count"),
+                    LastChecked: health.TryGetProperty("last_checked", out var lastChecked) ? lastChecked.GetString() : null));
+            }
+        }
+        catch { }
+    }
+
+    private async Task LoadDeltaAsync()
+    {
+        try
+        {
+            var raw = await Api.GetAsync<JsonElement?>("api/delta?hours=6");
+            if (raw is not { } json)
+                return;
+
+            _deltaNewEvents = ReadInt(json, "new_events");
+            _deltaNewAlerts = ReadInt(json, "new_alerts");
+            _deltaDir = json.TryGetProperty("direction", out var direction) ? direction.GetString() ?? "flat" : "flat";
+            _deltaSummary = json.TryGetProperty("summary", out var summary) ? summary.GetString() ?? "" : "";
+        }
+        catch
+        {
+        }
+    }
+
+    private void ApplyHomeState()
+    {
+        _highRisk = Home.WindowEvents.Count(e => (e.RiskScore ?? 0) >= 0.7);
+
+        _narratives.Clear();
+        foreach (var narrative in Home.Watch?.Narratives.Take(6) ?? [])
+        {
+            _narratives.Add(new NarrativeItem(
+                Label: string.IsNullOrWhiteSpace(narrative.Topic) ? (narrative.SignalType ?? "Narrative") : narrative.Topic,
+                Severity: narrative.Severity,
+                SupportingText: $"{narrative.EventCount} events · {narrative.SourceCount} sources" +
+                                (string.IsNullOrWhiteSpace(narrative.TopRegion) ? "" : $" · {narrative.TopRegion}")));
+        }
+
+        _narrativeCount = Home.Watch?.Overview?.RisingNarratives
+            ?? Home.State.Overview.NarrativeSummary.Total;
+        if (_narrativeCount <= 0)
+            _narrativeCount = _narratives.Count;
+
+        _hotspots.Clear();
+        _hotspots.AddRange(Home.ResolvedHotspots.Take(5));
+        var lead = _hotspots.FirstOrDefault();
+        _leadRegionName = lead?.Region;
+        _leadRegionScore = lead?.Score ?? 0;
+        _leadRegionSummary = lead is null
+            ? "No resolved hotspot yet."
+            : $"{lead.Region} is leading the current escalation ladder at {lead.Score:0.00}, with {Home.WindowEvents.Count(ev => Home.State.Escalation.Scores.Any(score => score.Region == lead.Region && score.Score > 0))} linked events in the active window.";
+
+        _geoAssets.Clear();
+        var geoAssets = Home.State.Assets
+            .Where(a => a.LastLat.HasValue && a.LastLon.HasValue)
+            .ToList();
+        var anomalyAssets = geoAssets
+            .Where(ViStateService.IsAssetAnomalous)
+            .OrderByDescending(a => ParseAssetTime(a.LastSeen))
+            .Take(60);
+        var liveVessels = geoAssets
+            .Where(a => IsAssetType(a, "vessel"))
+            .OrderByDescending(a => ParseAssetTime(a.LastSeen))
+            .Take(140);
+        var liveAircraft = geoAssets
+            .Where(a => IsAssetType(a, "aircraft"))
+            .OrderByDescending(a => ParseAssetTime(a.LastSeen))
+            .Take(100);
+        var otherAssets = geoAssets
+            .Where(a => !IsAssetType(a, "vessel") && !IsAssetType(a, "aircraft"))
+            .OrderByDescending(a => ParseAssetTime(a.LastSeen))
+            .Take(40);
+
+        _geoAssets.AddRange(anomalyAssets
+            .Concat(liveVessels)
+            .Concat(liveAircraft)
+            .Concat(otherAssets)
+            .Where(a => !string.IsNullOrWhiteSpace(a.AssetId))
+            .GroupBy(a => a.AssetId!, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .Take(2500));
+
+        _mapEventCount = Home.WindowEvents.Count(e => e.Location?.Lat is not null && e.Location?.Lon is not null);
+        _mapAssetCount = _geoAssets.Count;
+        _mapDirty = true;
+    }
+
+    private async Task RenderGlobalMapAsync()
+    {
+        if (_disposed || _mapRef is null)
+            return;
+
+        try
+        {
+            var mapEvents = Home.WindowEvents
+                .Where(e => e.Location?.Lat is not null && e.Location?.Lon is not null)
+                .OrderByDescending(e => e.RiskScore ?? 0)
+                .Take(180)
+                .ToList();
+
+            var eventData = mapEvents
+                .Select(e => new
+                {
+                    lat = e.Location!.Lat!.Value,
+                    lon = e.Location!.Lon!.Value,
+                    eventId = e.EventId,
+                    title = e.Title,
+                    riskScore = e.RiskScore ?? 0d,
+                    eventType = e.EventType ?? ""
+                })
+                .ToArray();
+
+            var assetData = _geoAssets
+                .Take(2500)
+                .Select(a => new
+                {
+                    lat = a.LastLat!.Value,
+                    lon = a.LastLon!.Value,
+                    assetId = a.AssetId,
+                    name = a.Name ?? a.Callsign ?? a.Identifier ?? a.AssetId,
+                    type = a.AssetType ?? "asset",
+                    anomaly = ViStateService.IsAssetAnomalous(a),
+                    speed = a.LastSpeed ?? 0d,
+                    heading = a.LastHeading ?? 0d
+                })
+                .ToArray();
+
+            var coords = eventData
+                .Select(e => (Lat: (double?)e.lat, Lon: (double?)e.lon))
+                .Concat(assetData.Select(a => (Lat: (double?)a.lat, Lon: (double?)a.lon)))
+                .Where(p => p.Lat.HasValue && p.Lon.HasValue)
+                .Select(p => (Lat: p.Lat!.Value, Lon: p.Lon!.Value))
+                .ToList();
+
+            double? minLat = null;
+            double? maxLat = null;
+            double? minLon = null;
+            double? maxLon = null;
+            if (coords.Count > 0)
+            {
+                minLat = coords.Min(p => p.Lat);
+                maxLat = coords.Max(p => p.Lat);
+                minLon = coords.Min(p => p.Lon);
+                maxLon = coords.Max(p => p.Lon);
+            }
+
+            if (_overviewMapInitialized)
+            {
+                var updated = await JS.InvokeAsync<bool>(
+                    "viMap.updateWorkspaceMap",
+                    "overview-map",
+                    minLat,
+                    maxLat,
+                    minLon,
+                    maxLon,
+                    assetData,
+                    eventData);
+                if (updated)
+                    return;
+            }
+
+            await JS.InvokeVoidAsync(
+                "viMap.initWorkspaceMap",
+                "overview-map",
+                minLat,
+                maxLat,
+                minLon,
+                maxLon,
+                assetData,
+                eventData,
+                _mapRef);
+            _overviewMapInitialized = true;
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private void OnHomeChanged()
+    {
+        if (_disposed)
+            return;
+
+        _generatedAt = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm'Z'");
+        ApplyHomeState();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public void OnWsEventSelected(string eventId) => _ = InvokeAsync(() => OpenEvent(eventId));
+
+    [JSInvokable]
+    public void OnWsAssetSelected(string assetId) => _ = InvokeAsync(() => OpenAsset(assetId));
+
+    private void OpenEvent(string? eventId)
+    {
+        if (!string.IsNullOrWhiteSpace(eventId))
+            Nav.NavigateTo($"/events/{Uri.EscapeDataString(eventId)}");
+    }
+
+    private void OpenAsset(string? assetId)
+    {
+        if (!string.IsNullOrWhiteSpace(assetId))
+            Nav.NavigateTo($"/assets/{Uri.EscapeDataString(assetId)}");
+    }
+
+    private void OpenRegion(string? region)
+    {
+        if (!string.IsNullOrWhiteSpace(region))
+            Nav.NavigateTo($"/map?region={Uri.EscapeDataString(region)}");
+    }
+
+    private static int ReadInt(JsonElement element, string name)
+        => element.TryGetProperty(name, out var property) && property.TryGetInt32(out var value) ? value : 0;
+
+    private static double ReadDouble(JsonElement element, string name)
+        => element.TryGetProperty(name, out var property) && property.TryGetDouble(out var value) ? value : 0d;
+
+    private static string HumanizeKey(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return "Unknown";
+        return string.Join(" ", raw.Split(['_', '-'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => char.ToUpperInvariant(part[0]) + part[1..]));
+    }
+
+    private static string FmtAge(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "--";
+        if (!DateTimeOffset.TryParse(raw, out var dto)) return "--";
+        var d = DateTimeOffset.UtcNow - dto.ToUniversalTime();
+        return d.TotalMinutes < 60 ? $"{(int)d.TotalMinutes}m ago"
+            : d.TotalHours < 24 ? $"{(int)d.TotalHours}h ago"
+            : $"{(int)d.TotalDays}d ago";
+    }
+
+    private static string RiskCls(double value) => value switch
+    {
+        >= 0.7 => "err",
+        >= 0.4 => "warn",
+        _ => "ok"
+    };
+
+    private static bool IsAssetType(AssetDto asset, string type) =>
+        string.Equals(asset.AssetType, type, StringComparison.OrdinalIgnoreCase);
+
+    private static DateTime ParseAssetTime(string? raw) =>
+        DateTime.TryParse(raw, out var value) ? value : DateTime.MinValue;
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        Home.OnChanged -= OnHomeChanged;
+        _refreshTimer?.Stop();
+        _refreshTimer?.Dispose();
+        _mapRef?.Dispose();
+        await ValueTask.CompletedTask;
+    }
+
+    private sealed record EventItem(string? EventId, string? Title, string? Source, string? EventType, double RiskScore, string? Timestamp);
+    private sealed record AlertItem(string? AlertId, string? Title, string? Severity, string? Entity);
+    private sealed record SourceItem(string Label, string Status, string StatusClass, int RecordCount, string? LastChecked);
+    private sealed record NarrativeItem(string Label, string? Severity, string SupportingText);
+}

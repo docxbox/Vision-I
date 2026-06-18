@@ -1,0 +1,289 @@
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@implements IDisposable
+
+@if (Map is null)
+{
+    <EmptyState Message="No map data." />
+}
+else
+{
+    var geo = Map.PrimaryGeoFilter;
+    <div style="display:grid;grid-template-columns:1fr 270px;gap:12px;margin-bottom:14px;align-items:start;">
+        <div>
+            <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-wrap:wrap;">
+                <span style="font-size:11px;color:var(--tm);">Layers:</span>
+                <button class="vi-btn sm @(_showAssets ? "primary" : "")" @onclick="ToggleAssets">
+                    Assets (@Map.AssetCount)
+                </button>
+                <button class="vi-btn sm @(_showEvents ? "primary" : "")" @onclick="ToggleEvents">
+                    Events (@_geoEventCount)
+                </button>
+            </div>
+            <div id="workspace-map" style="height:440px;border-radius:6px;overflow:hidden;background:var(--sf);"></div>
+        </div>
+
+        <div class="vi-stack" style="gap:10px;">
+            <div class="vi-panel" style="padding:12px;">
+                <div class="vi-kicker" style="margin-bottom:8px;">AOI Summary</div>
+                <div class="vi-stack" style="gap:4px;font-size:12px;">
+                    <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Total assets</span><strong>@Map.AssetCount</strong></div>
+                    <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Inside AOI</span><span>@Map.AssetItems.Count(a => a.WithinAoi)</span></div>
+                    <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Regional sample</span><span>@Map.AssetItems.Count(a => !a.WithinAoi)</span></div>
+                    <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Vessels</span><span>@Map.AssetItems.Count(a => a.AssetType == "vessel")</span></div>
+                    <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Aircraft</span><span>@Map.AssetItems.Count(a => a.AssetType == "aircraft")</span></div>
+                    <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Anomalies</span><span class="@(_mapAnom > 0 ? "err" : "")">@_mapAnom</span></div>
+                    <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Geo events</span><span>@_geoEventCount</span></div>
+                    <div style="font-size:10px;color:var(--tf);margin-top:4px;">@Map.GeneratedAt.ToString("HH:mm") UTC @(Map.FromCache ? "· CACHED" : "")</div>
+                </div>
+            </div>
+
+            @if (geo is not null)
+            {
+                <div class="vi-panel" style="padding:12px;">
+                    <div class="vi-kicker" style="margin-bottom:8px;">Area of Interest</div>
+                    <div class="vi-stack" style="gap:3px;font-size:11px;">
+                        <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Lat</span><span>@geo.MinLat° – @geo.MaxLat°N</span></div>
+                        <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Lon</span><span>@geo.MinLon° – @geo.MaxLon°E</span></div>
+                        <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Type</span><span class="vi-chip">@geo.FilterType</span></div>
+                        @if (!string.IsNullOrWhiteSpace(geo.Name)) { <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Name</span><span>@geo.Name</span></div> }
+                    </div>
+                </div>
+            }
+
+            @if (_selectedEvent is not null)
+            {
+                var se    = _selectedEvent;
+                var risk  = se.RiskScore ?? 0;
+                var rkCls = risk >= 0.7 ? "err" : risk >= 0.4 ? "warn" : "ok";
+                var bdrC  = risk >= 0.7 ? "var(--err)" : risk >= 0.4 ? "var(--warn)" : "var(--accent)";
+                <div class="vi-panel" style="padding:12px;border-left:3px solid @bdrC;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <div class="vi-kicker" style="margin:0;">Event</div>
+                        <button class="vi-btn sm" style="padding:0 4px;" @onclick="() => _selectedEvent = null">×</button>
+                    </div>
+                    <div style="font-size:12px;font-weight:600;margin-bottom:6px;line-height:1.4;">@se.Title</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">
+                        @if (!string.IsNullOrEmpty(se.EventType)) { <span class="vi-chip">@se.EventType</span> }
+                        <span class="vi-chip @rkCls">risk @risk.ToString("F2")</span>
+                    </div>
+                    @if (!string.IsNullOrEmpty(se.Timestamp))
+                    {
+                        var ts = se.Timestamp.Length > 16 ? se.Timestamp[..16].Replace("T", " ") : se.Timestamp;
+                        <div style="font-size:10px;color:var(--tf);margin-bottom:8px;">@ts UTC</div>
+                    }
+                    <button class="vi-btn sm primary" style="width:100%;"
+                            @onclick='() => Nav.NavigateTo($"/events/{Uri.EscapeDataString(se.EventId)}?from={Uri.EscapeDataString(Slug)}")'>
+                        View Event Detail
+                    </button>
+                </div>
+            }
+            else if (_selectedAsset is not null)
+            {
+                var sa      = _selectedAsset;
+                var sDn     = !string.IsNullOrEmpty(sa.Name) ? sa.Name : (sa.Callsign ?? sa.AssetId);
+                var sBdrCol = sa.IsAnomaly ? "var(--err)" : (sa.AssetType == "vessel" ? "var(--accent)" : "var(--warn)");
+                <div class="vi-panel" style="padding:12px;border-left:3px solid @sBdrCol;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <div class="vi-kicker" style="margin:0;">Selected Asset</div>
+                        <button class="vi-btn sm" style="padding:0 4px;" @onclick="() => _selectedAsset = null">×</button>
+                    </div>
+                    <div style="font-size:13px;font-weight:600;margin-bottom:4px;">@sDn</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">
+                        <span class="vi-chip">@sa.AssetType</span>
+                        @if (sa.IsAnomaly) { <span class="vi-chip err">ANOMALY</span> }
+                    </div>
+                    <div class="vi-stack" style="gap:3px;font-size:11px;">
+                        @if (sa.LastLat.HasValue && sa.LastLon.HasValue)
+                        {
+                            <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Lat</span><span>@sa.LastLat.Value.ToString("F4")°</span></div>
+                            <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Lon</span><span>@sa.LastLon.Value.ToString("F4")°</span></div>
+                        }
+                        @if (sa.LastSpeed.HasValue)
+                        {
+                            <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Speed</span><span style="@(sa.IsAnomaly ? "color:var(--err);" : "")">@sa.LastSpeed.Value.ToString("F1") kn</span></div>
+                        }
+                        @if (sa.OnGround.HasValue)
+                        {
+                            <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">On Ground</span><span>@(sa.OnGround.Value ? "Yes" : "No")</span></div>
+                        }
+                        @if (sa.LastSeen is { Length: > 0 })
+                        {
+                            var seen = sa.LastSeen.Length > 16 ? sa.LastSeen[..16].Replace("T", " ") : sa.LastSeen;
+                            <div style="display:flex;justify-content:space-between;"><span style="color:var(--tm);">Last Seen</span><span>@seen</span></div>
+                        }
+                    </div>
+                    <button class="vi-btn sm primary" style="margin-top:10px;width:100%;"
+                            @onclick='() => Nav.NavigateTo($"/assets/{Uri.EscapeDataString(sa.AssetId)}?from={Uri.EscapeDataString(Slug)}")'>
+                        View Asset Detail
+                    </button>
+                </div>
+            }
+            else if (_nearAnom.Any())
+            {
+                <div class="vi-panel" style="padding:12px;">
+                    <div class="vi-kicker" style="margin-bottom:8px;color:var(--err);">Asset anomalies</div>
+                    <div class="vi-stack" style="gap:6px;">
+                        @foreach (var a in _nearAnom)
+                        {
+                            <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;"
+                                 @onclick='() => Nav.NavigateTo($"/assets/{Uri.EscapeDataString(a.AssetId)}?from={Uri.EscapeDataString(Slug)}")'>
+                                <div>
+                                    <div style="font-size:11px;font-weight:500;">@(a.Name ?? a.Callsign ?? a.AssetId[..Math.Min(12, a.AssetId.Length)])</div>
+                                    <div style="font-size:10px;color:var(--tf);">@a.AssetType</div>
+                                </div>
+                                <span class="vi-chip err" style="font-size:10px;">@(a.LastSpeed.HasValue ? $"{a.LastSpeed.Value:F0} kn" : "anomaly")</span>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+
+    @if (Map.AssetItems.Any())
+    {
+        <div class="vi-kicker" style="margin-bottom:6px;">Tracked assets</div>
+        <div class="vi-tbl-wrap">
+            <table class="vi-table">
+                <thead><tr><th>Type</th><th>Name / Callsign</th><th>Lat</th><th>Lon</th><th>Speed (kn)</th><th>Last Seen</th></tr></thead>
+                <tbody>
+                    @foreach (var a in Map.AssetItems.Take(50))
+                    {
+                        var dn   = !string.IsNullOrEmpty(a.Name) ? a.Name : (a.Callsign ?? a.AssetId);
+                        var lat  = a.LastLat.HasValue  ? a.LastLat.Value.ToString("F4")  : "—";
+                        var lon  = a.LastLon.HasValue  ? a.LastLon.Value.ToString("F4")  : "—";
+                        var spd  = a.LastSpeed.HasValue ? a.LastSpeed.Value.ToString("F1") : "—";
+                        var seen = a.LastSeen is { Length: > 10 } ? a.LastSeen[..16].Replace("T", " ") : (a.LastSeen ?? "—");
+                        <tr style="@(a.IsAnomaly ? "cursor:pointer;background:rgba(255,80,80,0.06);" : "cursor:pointer;")"
+                            @onclick="() => SelectAsset(a)">
+                            <td><span class="vi-chip">@a.AssetType</span></td>
+                            <td style="font-size:12px;">@dn</td>
+                            <td style="font-size:11px;">@lat</td>
+                            <td style="font-size:11px;">@lon</td>
+                            <td style="font-size:11px;@(a.IsAnomaly ? "color:var(--err);" : "")">@spd</td>
+                            <td style="font-size:11px;color:var(--tm);">@seen</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <EmptyState Message="No assets in AOI." />
+    }
+}
+
+@code {
+    [Parameter] public WorkspaceMap? Map  { get; set; }
+    [Parameter] public string        Slug { get; set; } = "";
+
+    int                       _mapAnom;
+    int                       _geoEventCount;
+    List<WorkspaceAssetItem>  _nearAnom      = [];
+    bool                      _mapNeedsInit;
+    bool                      _mapInitialized;
+    bool                      _showAssets    = true;
+    bool                      _showEvents    = true;
+    WorkspaceAssetItem?       _selectedAsset;
+    WorkspaceMapEventItem?    _selectedEvent;
+    DotNetObjectReference<WorkspaceMapTab>? _dotNetRef;
+
+    protected override void OnParametersSet()
+    {
+        if (Map is null) return;
+        _mapAnom        = Map.AssetItems.Count(a => a.IsAnomaly);
+        _geoEventCount  = Map.EventItems.Count;
+        _nearAnom       = Map.AssetItems.Where(a => a.IsAnomaly).Take(5).ToList();
+        _mapNeedsInit   = true;
+        _selectedAsset  = null;
+        _selectedEvent  = null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Map is null || !_mapNeedsInit) return;
+        _mapNeedsInit = false;
+        _dotNetRef ??= DotNetObjectReference.Create(this);
+        var geo       = Map.PrimaryGeoFilter;
+        var assetData = Map.AssetItems
+            .Where(a => a.LastLat.HasValue && a.LastLon.HasValue)
+            .Select(a => new {
+                lat     = a.LastLat!.Value,
+                lon     = a.LastLon!.Value,
+                assetId = a.AssetId,
+                name    = a.Name ?? a.Callsign ?? a.AssetId,
+                type    = a.AssetType,
+                anomaly = a.IsAnomaly,
+                speed    = a.LastSpeed ?? 0d,
+                heading  = a.LastHeading ?? 0d,
+                altitude = a.LastAltitude ?? 0d,
+                withinAoi = a.WithinAoi
+            }).ToArray();
+        var eventData = Map.EventItems
+            .Select(e => new {
+                lat       = e.Lat,
+                lon       = e.Lon,
+                eventId   = e.EventId,
+                title     = e.Title,
+                riskScore = e.RiskScore ?? 0d,
+                eventType = e.EventType ?? ""
+            }).ToArray();
+        try
+        {
+            if (_mapInitialized)
+            {
+                var updated = await JS.InvokeAsync<bool>("viMap.updateWorkspaceMap", "workspace-map",
+                    geo?.MinLat, geo?.MaxLat, geo?.MinLon, geo?.MaxLon,
+                    assetData, eventData);
+                if (updated)
+                    return;
+            }
+
+            await JS.InvokeVoidAsync("viMap.initWorkspaceMap", "workspace-map",
+                geo?.MinLat, geo?.MaxLat, geo?.MinLon, geo?.MaxLon,
+                assetData, eventData, _dotNetRef);
+            _mapInitialized = true;
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"[WorkspaceMapTab] map init failed: {ex.Message}"); }
+    }
+
+    async Task ToggleAssets()
+    {
+        _showAssets = !_showAssets;
+        try { await JS.InvokeVoidAsync("viMap.setLayerVisible", "workspace-map", "assets", _showAssets); }
+        catch { }
+    }
+
+    async Task ToggleEvents()
+    {
+        _showEvents = !_showEvents;
+        try { await JS.InvokeVoidAsync("viMap.setLayerVisible", "workspace-map", "events", _showEvents); }
+        catch { }
+    }
+
+    [JSInvokable]
+    public void OnWsAssetSelected(string assetId)
+    {
+        _selectedAsset = Map?.AssetItems.FirstOrDefault(a => a.AssetId == assetId);
+        _selectedEvent = null;
+        InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public void OnWsEventSelected(string eventId)
+    {
+        _selectedEvent = Map?.EventItems.FirstOrDefault(e => e.EventId == eventId);
+        _selectedAsset = null;
+        InvokeAsync(StateHasChanged);
+    }
+
+    void SelectAsset(WorkspaceAssetItem asset)
+    {
+        _selectedAsset = _selectedAsset?.AssetId == asset.AssetId ? null : asset;
+        _selectedEvent = null;
+    }
+
+    public void Dispose() => _dotNetRef?.Dispose();
+}

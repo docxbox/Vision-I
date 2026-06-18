@@ -1,0 +1,78 @@
+# Secrets
+.env
+python/.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+*.log
+
+# .NET
+bin/
+obj/
+*.user
+.vs/
+.data-protection/
+*.suo
+*.userprefs
+launchSettings.json
+appsettings.Development.json
+build_errors*.txt
+
+# Docker
+docker-compose.override.yml
+
+# Local project artifacts
+artifacts/
+debuglogs/
+.claude/
+.playwright-mcp/
+openapi.tmp.json
+body.json
+/*.jpeg
+/*.jpg
+
+# Generated runtime data
+python/data/tles.active.tle
+python/data/tmp*
+
+# Non-runtime project extras
+scripts/
+test_api.py
+python/tests/
+python/pytest.ini
+python/docs/
+dotnet/VisionI.API.Tests/
+dotnet/README.md
+dotnet/fix*.ps1
+dotnet/fix.py
+dotnet/verify-*
+dotnet/**/*.http
+
+# Database dumps and data
+*.sql
+*.dump
+*.csv
+*.sqlite
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE files
+.idea/
+*.swp
+*.swo

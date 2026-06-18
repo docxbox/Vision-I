@@ -1,0 +1,411 @@
+@page "/domain-intel"
+@layout AnalystLayout
+@inject AirspaceService Svc
+@inject IJSRuntime JS
+@implements IDisposable
+@implements IAsyncDisposable
+
+<PageTitle>Domain Intelligence | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Assess / Domain Intelligence</div>
+            <h1 class="vi-h1">Airspace & Electromagnetic</h1>
+            <div class="vi-sub">NOTAM CLOSURES · GPS JAMMING · REROUTE DETECTION · SATELLITE PASSES</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" disabled="@Svc.Loading" @onclick="ReloadAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Closures</div>
+            <div class="vi-metric-val crit">@(Svc.Closures?.Total ?? 0)</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Jamming Tiles</div>
+            <div class="vi-metric-val warn">@(Svc.Jamming?.Tiles.Count ?? 0)</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Reroutes</div>
+            <div class="vi-metric-val info">@(Svc.Reroutes?.Total ?? 0)</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Sat Passes</div>
+            <div class="vi-metric-val accent">@(Svc.Satellites?.Total ?? 0)</div>
+        </div>
+    </div>
+
+    @if (Svc.Loading)
+    {
+        <div class="vi-loading">ACQUIRING DOMAIN PICTURE</div>
+    }
+    else if (!string.IsNullOrWhiteSpace(Svc.Error))
+    {
+        <div class="vi-err">@Svc.Error</div>
+    }
+    else
+    {
+        <div class="vi-card vi-domain-map-card">
+            <div class="vi-card-hdr">
+                <span class="material-symbols-outlined" style="font-size:14px;">public</span>
+                GLOBAL DOMAIN MAP
+                <span class="vi-chip crit" style="font-size:9px;margin-left:auto;">BLOCKED ZONES</span>
+                <span class="vi-chip warn" style="font-size:9px;">JAMMING</span>
+                <span class="vi-chip info" style="font-size:9px;">REROUTES</span>
+                <span class="vi-chip accent" style="font-size:9px;">SAT PASSES</span>
+            </div>
+            <div class="vi-domain-map-shell">
+                <div id="@DomainMapId" class="vi-domain-map" aria-label="Interactive airspace and electromagnetic domain map"></div>
+                <div class="vi-domain-map-overlay">
+                    <span><b>@(Svc.Closures?.Closures?.Count ?? 0)</b> zones</span>
+                    <span><b>@(Svc.Jamming?.Tiles?.Count ?? 0)</b> jam tiles</span>
+                    <span><b>@(Svc.Reroutes?.Events?.Count ?? 0)</b> reroutes</span>
+                    <span><b>@(Svc.Satellites?.Passes?.Count ?? 0)</b> passes</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="vi-domain-grid">
+
+            <!-- AIRSPACE CLOSURES -->
+            <div class="vi-card">
+                <div class="vi-card-hdr">
+                    <span class="material-symbols-outlined" style="font-size:14px;">flight_takeoff</span>
+                    NOTAM CLOSURES
+                    @if (!string.IsNullOrWhiteSpace(Svc.Closures?.Note))
+                    {
+                        <span class="vi-chip warn" style="font-size:9px;margin-left:auto;">PROVIDER OFFLINE</span>
+                    }
+                    else
+                    {
+                        <span class="vi-faint" style="font-size:10px;margin-left:auto;">@(Svc.Closures?.Total ?? 0) zones</span>
+                    }
+                </div>
+
+                @if (Svc.Closures?.Note is not null && !(Svc.Closures.Closures?.Any() == true))
+                {
+                    <div class="vi-empty" style="padding:12px;">
+                        <span class="material-symbols-outlined">info</span>
+                        @Svc.Closures.Note
+                    </div>
+                }
+                else if (Svc.Closures?.Closures?.Any() == true)
+                {
+                    <div class="vi-domain-list">
+                        @foreach (var c in Svc.Closures.Closures.Take(10))
+                        {
+                            <div class="vi-domain-item">
+                                <div class="vi-domain-item-hdr">
+                                    <span class="vi-chip @AirspaceService.StatusClass(c.Status)" style="font-size:9px;padding:1px 5px;">
+                                        @((c.Status ?? "ACTIVE").ToUpperInvariant())
+                                    </span>
+                                    <span class="vi-domain-item-title">@c.Title</span>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(c.Description))
+                                {
+                                    <div class="vi-faint" style="font-size:10px;margin-top:3px;line-height:1.4;">
+                                        @(c.Description.Length > 140 ? c.Description[..140] + "…" : c.Description)
+                                    </div>
+                                }
+                                @if (c.Start is not null || c.End is not null)
+                                {
+                                    <div class="vi-td-mono vi-faint" style="font-size:9px;margin-top:4px;">
+                                        @FormatTs(c.Start) → @FormatTs(c.End)
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="vi-empty" style="padding:12px;">No active closures.</div>
+                }
+            </div>
+
+            <!-- GPS JAMMING HEATMAP -->
+            <div class="vi-card">
+                <div class="vi-card-hdr">
+                    <span class="material-symbols-outlined" style="font-size:14px;">signal_wifi_statusbar_not_connected</span>
+                    GPS JAMMING
+                    <span class="vi-faint" style="font-size:10px;margin-left:auto;">
+                        @(Svc.Jamming?.WindowHours ?? 3)h window
+                    </span>
+                </div>
+
+                @if (Svc.Jamming?.Tiles?.Any() == true)
+                {
+                    <div class="vi-domain-list">
+                        @foreach (var tile in Svc.Jamming.Tiles.OrderByDescending(t => t.Count).Take(12))
+                        {
+                            <div class="vi-domain-item">
+                                <div class="vi-domain-item-hdr">
+                                    <span class="vi-chip @AirspaceService.IntensityClass(tile.Intensity)" style="font-size:9px;padding:1px 5px;">
+                                        @(tile.Intensity.HasValue ? $"{tile.Intensity:F0}%" : $"×{tile.Count}")
+                                    </span>
+                                    <span class="vi-td-mono" style="font-size:10px;">
+                                        @tile.Lat.ToString("F1")°N / @tile.Lon.ToString("F1")°E
+                                    </span>
+                                    <span class="vi-faint" style="font-size:10px;margin-left:auto;">@tile.Count events</span>
+                                </div>
+                                <div class="vi-domain-bar">
+                                    <div class="vi-domain-bar-fill @AirspaceService.IntensityClass(tile.Intensity)"
+                                         style="width:@(Math.Min((tile.Intensity ?? tile.Count / 10.0) * 100, 100).ToString("F0"))%;">
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+                else if (!string.IsNullOrWhiteSpace(Svc.Jamming?.Note))
+                {
+                    <div class="vi-empty" style="padding:12px;">@Svc.Jamming.Note</div>
+                }
+                else
+                {
+                    <div class="vi-empty" style="padding:12px;">No jamming detected in current window.</div>
+                }
+            </div>
+
+            <!-- AIR REROUTES -->
+            <div class="vi-card">
+                <div class="vi-card-hdr">
+                    <span class="material-symbols-outlined" style="font-size:14px;">alt_route</span>
+                    REROUTING PATTERNS
+                    <span class="vi-faint" style="font-size:10px;margin-left:auto;">@(Svc.Reroutes?.Total ?? 0) detected</span>
+                </div>
+
+                @if (Svc.Reroutes?.Events?.Any() == true)
+                {
+                    <div class="vi-domain-list">
+                        @foreach (var ev in Svc.Reroutes.Events.Take(10))
+                        {
+                            <div class="vi-domain-item">
+                                <div class="vi-domain-item-hdr">
+                                    @if (ev.RiskScore.HasValue)
+                                    {
+                                        <span class="vi-chip @RiskClass(ev.RiskScore)" style="font-size:9px;padding:1px 4px;">
+                                            @ev.RiskScore.Value.ToString("F1")
+                                        </span>
+                                    }
+                                    <span class="vi-domain-item-title">@(ev.Title ?? ev.EventId ?? "Unknown event")</span>
+                                </div>
+                                <div style="display:flex;gap:8px;margin-top:3px;">
+                                    @if (!string.IsNullOrEmpty(ev.Source))
+                                    {
+                                        <span class="vi-chip" style="font-size:9px;padding:1px 4px;">@ev.Source.ToUpperInvariant()</span>
+                                    }
+                                    @if (ev.Lat.HasValue && ev.Lon.HasValue)
+                                    {
+                                        <span class="vi-td-mono vi-faint" style="font-size:9px;">
+                                            @ev.Lat.Value.ToString("F2")°, @ev.Lon.Value.ToString("F2")°
+                                        </span>
+                                    }
+                                    <span class="vi-faint" style="font-size:9px;margin-left:auto;">@FormatTs(ev.Timestamp)</span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+                else if (!string.IsNullOrWhiteSpace(Svc.Reroutes?.Note))
+                {
+                    <div class="vi-empty" style="padding:12px;">@Svc.Reroutes.Note</div>
+                }
+                else
+                {
+                    <div class="vi-empty" style="padding:12px;">No reroutes detected in current window.</div>
+                }
+            </div>
+
+            <!-- SATELLITE PASSES -->
+            <div class="vi-card">
+                <div class="vi-card-hdr">
+                    <span class="material-symbols-outlined" style="font-size:14px;">satellite_alt</span>
+                    SATELLITE PASSES
+                    <span class="vi-faint" style="font-size:10px;margin-left:auto;">next 6h · global</span>
+                </div>
+
+                @if (Svc.Satellites?.Passes?.Any() == true)
+                {
+                    <div class="vi-domain-list">
+                        @foreach (var p in Svc.Satellites.Passes.Take(10))
+                        {
+                            <div class="vi-domain-item">
+                                <div class="vi-domain-item-hdr">
+                                    <span class="vi-chip info" style="font-size:9px;padding:1px 5px;">
+                                        @(p.MaxEl.HasValue ? $"{p.MaxEl:F0}°" : "SAT")
+                                    </span>
+                                    <span class="vi-domain-item-title">@(p.SatName ?? p.NoradId ?? "Unknown")</span>
+                                </div>
+                                <div class="vi-td-mono vi-faint" style="font-size:9px;margin-top:3px;">
+                                    AOS @FormatTs(p.Aos) → LOS @FormatTs(p.Los)
+                                    @if (p.DurationS.HasValue)
+                                    {
+                                        <span style="margin-left:6px;">(@((p.DurationS.Value / 60).ToString("F0"))min)</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+                else if (!string.IsNullOrWhiteSpace(Svc.Satellites?.Note))
+                {
+                    <div class="vi-empty" style="padding:12px;">
+                        <span class="material-symbols-outlined">info</span>
+                        @Svc.Satellites.Note
+                    </div>
+                }
+                else
+                {
+                    <div class="vi-empty" style="padding:12px;">No satellite passes computed. Configure TLE provider.</div>
+                }
+            </div>
+
+        </div>
+    }
+</div>
+
+@code {
+    private const string DomainMapId = "vi-domain-globe-map";
+    private bool _mapReady;
+    private readonly CancellationTokenSource _refreshCts = new();
+    private bool _disposed;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnChanged;
+        await Svc.EnsureLoadedAsync();
+        _ = AutoRefreshAsync(_refreshCts.Token);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_mapReady && !Svc.Loading && string.IsNullOrWhiteSpace(Svc.Error))
+        {
+            await JS.InvokeVoidAsync("viDomainGlobe.init", DomainMapId);
+            _mapReady = true;
+            await PushGlobeAsync();
+        }
+    }
+
+    void OnChanged() => InvokeAsync(async () =>
+    {
+        StateHasChanged();
+        await PushGlobeAsync();
+    });
+
+    async Task ReloadAsync()
+    {
+        await Svc.LoadAsync();
+        await PushGlobeAsync();
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _refreshCts.Cancel();
+        _refreshCts.Dispose();
+        Svc.OnChanged -= OnChanged;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        await _refreshCts.CancelAsync();
+        _refreshCts.Dispose();
+        Svc.OnChanged -= OnChanged;
+        try { await JS.InvokeVoidAsync("viDomainGlobe.destroy", DomainMapId); }
+        catch { /* Ignore JS teardown races during circuit disposal. */ }
+    }
+
+    private async Task AutoRefreshAsync(CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(20));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(token))
+            {
+                await Svc.LoadAsync(silent: true);
+                await PushGlobeAsync();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal page disposal.
+        }
+    }
+
+    private async Task PushGlobeAsync()
+    {
+        if (!_mapReady || Svc.Loading) return;
+
+        var payload = new
+        {
+            closures = (Svc.Closures?.Closures ?? []).Take(200).Select(c => new
+            {
+                id = c.Id ?? c.Identifier ?? c.Title,
+                title = c.Title,
+                status = c.Status,
+                description = c.Description,
+                lat_min = c.LatMin,
+                lon_min = c.LonMin,
+                lat_max = c.LatMax,
+                lon_max = c.LonMax
+            }),
+            jamming = (Svc.Jamming?.Tiles ?? []).Take(250).Select(t => new
+            {
+                lat = t.Lat,
+                lon = t.Lon,
+                lat_min = t.LatMin,
+                lon_min = t.LonMin,
+                lat_max = t.LatMax,
+                lon_max = t.LonMax,
+                count = t.Count,
+                intensity = t.Intensity ?? t.Density
+            }),
+            reroutes = (Svc.Reroutes?.Events ?? []).Take(250).Select(r => new
+            {
+                id = r.EventId,
+                title = r.Title,
+                source = r.Source,
+                lat = r.Lat,
+                lon = r.Lon,
+                risk_score = r.RiskScore
+            }),
+            satellites = (Svc.Satellites?.Passes ?? []).Take(80).Select(s => new
+            {
+                id = s.SatId ?? s.NoradId ?? s.SatName,
+                name = s.SatName ?? s.NoradId ?? "Satellite pass",
+                max_el = s.MaxEl,
+                lat = s.Lat,
+                lon = s.Lon,
+                points = s.Points.Take(24).Select(p => new { lat = p.Lat, lon = p.Lon })
+            })
+        };
+
+        try { await JS.InvokeVoidAsync("viDomainGlobe.update", DomainMapId, payload); }
+        catch { /* MapLibre may still be hydrating while Blazor settles. */ }
+    }
+
+    static string FormatTs(string? ts)
+    {
+        if (string.IsNullOrEmpty(ts)) return "—";
+        return DateTime.TryParse(ts, out var dt)
+            ? dt.ToUniversalTime().ToString("MM-dd HH:mm")
+            : ts[..Math.Min(16, ts.Length)];
+    }
+
+    static string RiskClass(double? risk) => risk switch
+    {
+        >= 0.8 => "crit",
+        >= 0.5 => "warn",
+        >= 0.3 => "info",
+        _      => "faint"
+    };
+
+}

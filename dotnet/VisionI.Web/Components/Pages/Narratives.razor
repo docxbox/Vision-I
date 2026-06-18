@@ -1,0 +1,196 @@
+@page "/narratives"
+@inject NarrativesService Svc
+@inject ViLiveSession SignalR
+@implements IDisposable
+
+<PageTitle>Narratives | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Explain / Narratives</div>
+            <h1 class="vi-h1">Narrative Detection</h1>
+            <div class="vi-sub">THEME CLUSTERING · CROSS-SOURCE PATTERNS</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" disabled="@Svc.Loading" @onclick="Svc.LoadAsync">Refresh</button>
+            <button class="vi-btn primary" disabled="@Svc.Detecting" @onclick="Svc.DetectAsync">
+                @(Svc.Detecting ? "Detecting…" : "Detect Narratives")
+            </button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Narratives</div>
+            <div class="vi-metric-val accent">@Svc.NarrativeCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Top Regions</div>
+            <div class="vi-metric-val">@Svc.TopRegions.Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Top Actors</div>
+            <div class="vi-metric-val">@Svc.TopActors.Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Lead Severity</div>
+            <div class="vi-metric-val @SevVal(Svc.LeadIndicator?.Severity)">
+                @(Svc.LeadIndicator?.Severity?.ToUpperInvariant() ?? "—")
+            </div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="vi-filter-bar">
+        <input class="vi-input sm" placeholder="Topic filter…" style="width:180px;" @bind="Svc.Topic"
+               @bind:event="oninput" />
+        <select class="vi-select sm" style="width:130px;" @bind="Svc.Sev">
+            <option value="">All severities</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+        </select>
+    </div>
+
+    @if (Svc.Loading)
+    {
+        <div class="vi-loading">LOADING NARRATIVES</div>
+    }
+    else if (!string.IsNullOrWhiteSpace(Svc.Error))
+    {
+        <div class="vi-err">@Svc.Error</div>
+    }
+    else
+    {
+        <div class="vi-split">
+            <!-- Narrative list -->
+            <div class="vi-panel">
+                <div class="vi-panel-hdr">
+                    <span class="vi-panel-title">Detected Narratives</span>
+                    <span class="vi-chip info">@Svc.NarrativeCount</span>
+                </div>
+                @if (!Svc.FilteredNarratives.Any())
+                {
+                    <div class="vi-empty">
+                        <span class="material-symbols-outlined">rss_feed</span>
+                        No narratives detected. Run detection to begin.
+                    </div>
+                }
+                else
+                {
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead>
+                                <tr>
+                                    <th>Topic</th>
+                                    <th>Type</th>
+                                    <th>Severity</th>
+                                    <th>Strength</th>
+                                    <th>Confidence</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var n in Svc.FilteredNarratives)
+                                {
+                                    <tr class="@(Svc.ActiveId == n.NarrativeId ? "sel" : "")" style="cursor:pointer;"
+                                        @onclick="() => Svc.ActiveId = n.NarrativeId ?? string.Empty">
+                                        <td>
+                                            <div class="vi-td-title">@n.Topic</div>
+                                            @if (n.SourceCount > 0)
+                                            {
+                                                <div class="vi-td-note">@n.SourceCount sources</div>
+                                            }
+                                        </td>
+                                        <td class="vi-td-mono">@n.SignalType</td>
+                                        <td><span class="vi-chip @NarrativesService.SevCls(n.Severity ?? "")">@(n.Severity?.ToUpperInvariant() ?? "—")</span></td>
+                                        <td class="vi-td-mono">@(n.Strength.ToString("0.0"))</td>
+                                        <td class="vi-td-mono">@(n.Confidence.ToString("0.0"))</td>
+                                        <td>
+                                            <button class="vi-btn sm" disabled="@(n.NarrativeId is null)"
+                                                    @onclick="() => Svc.ForecastAsync(n.NarrativeId!)">Forecast</button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+
+            <!-- Right: regions + actors -->
+            <div class="vi-stack">
+                @if (Svc.TopRegions.Any())
+                {
+                    <div class="vi-panel soft">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Top Regions</span></div>
+                        <div class="vi-panel-body vi-stack">
+                            @foreach (var r in Svc.TopRegions)
+                            {
+                                <div class="vi-kv">
+                                    <span class="vi-kv-key">@r.Region</span>
+                                    <span class="vi-chip warn">@r.AlertCount alerts</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                @if (Svc.TopActors.Any())
+                {
+                    <div class="vi-panel soft">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Top Actors</span></div>
+                        <div class="vi-panel-body vi-stack">
+                            @foreach (var a in Svc.TopActors)
+                            {
+                                <div class="vi-kv">
+                                    <span class="vi-kv-key">@a.Name</span>
+                                    <span class="vi-chip">@a.MentionCount mentions</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                @foreach (var tile in Svc.SummaryTiles())
+                {
+                    <div class="vi-panel soft">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">@tile.label</span></div>
+                        <div class="vi-panel-body">
+                            <div style="font-size:13px;color:var(--t2);">@tile.value</div>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged                += OnSvcChanged;
+        SignalR.OnIntelligenceUpdate += OnIntelligenceUpdate;
+        SignalR.OnCorrelationUpdate  += OnCorrelationUpdate;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    async Task OnIntelligenceUpdate() => await InvokeAsync(Svc.LoadAsync);
+    async Task OnCorrelationUpdate()  => await InvokeAsync(Svc.LoadAsync);
+
+    static string SevVal(string? s) => s?.ToLower() switch
+    {
+        "critical" => "err", "high" => "warn", "medium" => "warn", _ => ""
+    };
+
+    public void Dispose()
+    {
+        Svc.OnChanged                -= OnSvcChanged;
+        SignalR.OnIntelligenceUpdate -= OnIntelligenceUpdate;
+        SignalR.OnCorrelationUpdate  -= OnCorrelationUpdate;
+    }
+}

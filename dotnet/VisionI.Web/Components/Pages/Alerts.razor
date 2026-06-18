@@ -1,0 +1,208 @@
+@page "/alerts"
+@layout AnalystLayout
+@inject AlertsService Svc
+@inject ViLiveSession SignalR
+@implements IDisposable
+
+<PageTitle>Alerts | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Prioritize / Alerts</div>
+            <h1 class="vi-h1">Alert Queue</h1>
+            <div class="vi-sub">ANOMALY DETECTION · RISK SIGNALS</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" disabled="@Svc.Loading" @onclick="Svc.LoadAsync">Refresh</button>
+            <button class="vi-btn primary" @onclick="Svc.ScanAsync">Scan Now</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Total Alerts</div>
+            <div class="vi-metric-val accent">@Svc.Alerts.Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Critical</div>
+            <div class="vi-metric-val err">@Svc.Alerts.Count(a => a.Severity == "critical")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">High</div>
+            <div class="vi-metric-val warn">@Svc.Alerts.Count(a => a.Severity == "high")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Linked Entities</div>
+            <div class="vi-metric-val">@Svc.LinkedEntityCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Linked Locations</div>
+            <div class="vi-metric-val">@Svc.LinkedLocationCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Page</div>
+            <div class="vi-metric-val">@Svc.Page / @Svc.TotalPages</div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="vi-filter-bar">
+        <select class="vi-select sm" style="width:140px;" @bind="Svc.SeverityFilter"
+                @bind:after="Svc.ApplyFiltersAsync">
+            <option value="">All severities</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+        </select>
+        <label class="vi-row" style="gap:5px;font:600 11px/1 var(--mono);color:var(--tm);">
+            <input type="checkbox" @bind="Svc.ShowAcknowledged" @bind:after="Svc.ApplyFiltersAsync" />
+            Show acknowledged
+        </label>
+    </div>
+
+    @if (Svc.Loading)
+    {
+        <div class="vi-loading">LOADING ALERTS</div>
+    }
+    else if (!Svc.PagedAlerts.Any())
+    {
+        <div class="vi-empty">
+            <span class="material-symbols-outlined">notifications_none</span>
+            No alerts match current filters
+        </div>
+    }
+    else
+    {
+        <div class="vi-panel" style="flex:1;min-height:0;">
+            <div class="vi-tbl-wrap">
+                <table class="vi-table">
+                    <thead>
+                        <tr>
+                            <th>Alert</th>
+                            <th>Severity</th>
+                            <th>Type</th>
+                            <th>Entity</th>
+                            <th>Z-Score</th>
+                            <th>Detected</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var a in Svc.PagedAlerts)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="vi-td-title">@a.Title</div>
+                                    @if (!string.IsNullOrWhiteSpace(a.Description))
+                                    {
+                                        <div class="vi-td-note vi-trunc" style="max-width:260px;">@a.Description</div>
+                                    }
+                                </td>
+                                <td><span class="vi-chip @AlertsService.GetSeverityClass(a.Severity)">@((a.Severity ?? "medium").ToUpperInvariant())</span></td>
+                                <td class="vi-td-mono">@a.AlertType</td>
+                                <td class="vi-td-mono">@(a.Entity ?? "-")</td>
+                                <td class="vi-td-mono">@(a.ZScore.ToString("0.0"))</td>
+                                <td class="vi-td-mono vi-faint">@Fmt(a.DetectedAt)</td>
+                                <td>
+                                    @{ var aid = a.AlertId ?? string.Empty; }
+                                    @if (a.Escalated)
+                                    {
+                                        <span class="vi-chip err">ESCALATED</span>
+                                    }
+                                    else if (a.Dismissed)
+                                    {
+                                        <span class="vi-chip">DISMISSED</span>
+                                    }
+                                    else if (a.Acknowledged)
+                                    {
+                                        <span class="vi-chip ok">ACK</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="vi-chip warn">OPEN</span>
+                                    }
+                                </td>
+                                <td>
+                                    <div class="vi-row">
+                                        @if (!a.Acknowledged && !a.Dismissed && !a.Escalated)
+                                        {
+                                            <button class="vi-btn sm" disabled="@Svc.IsActioning(aid)"
+                                                    @onclick="() => Svc.AckAsync(aid)">
+                                                @(Svc.IsActioning(aid) ? "…" : "Ack")
+                                            </button>
+                                        }
+                                        @if (!a.Escalated && !a.Dismissed)
+                                        {
+                                            <button class="vi-btn sm warn" disabled="@Svc.IsActioning(aid)"
+                                                    @onclick="() => Svc.EscalateAsync(aid)"
+                                                    title="Escalate to senior analyst">
+                                                @(Svc.IsActioning(aid) ? "…" : "↑")
+                                            </button>
+                                        }
+                                        @if (!a.Dismissed)
+                                        {
+                                            <button class="vi-btn sm" disabled="@Svc.IsActioning(aid)"
+                                                    style="color:var(--tf);"
+                                                    @onclick="() => Svc.DismissAsync(aid)"
+                                                    title="Dismiss — no action needed">
+                                                @(Svc.IsActioning(aid) ? "…" : "✕")
+                                            </button>
+                                        }
+                                        <button class="vi-btn sm ok" disabled="@Svc.IsActioning(aid)"
+                                                @onclick="() => Svc.ResolveAsync(aid)">
+                                            @(Svc.IsActioning(aid) ? "…" : "Resolve")
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="vi-pager">
+                <span class="vi-pager-info">Page @Svc.Page of @Svc.TotalPages · @Svc.Alerts.Count total</span>
+                <button class="vi-btn sm" disabled="@(Svc.Page <= 1)" @onclick="() => Svc.GoToPage(Svc.Page - 1)">Prev</button>
+                <button class="vi-btn sm" disabled="@(Svc.Page >= Svc.TotalPages)" @onclick="() => Svc.GoToPage(Svc.Page + 1)">Next</button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged                += OnSvcChanged;
+        SignalR.OnIntelligenceUpdate += OnIntelligenceUpdate;
+        SignalR.OnIngestComplete     += OnIngestComplete;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    async Task OnIntelligenceUpdate() => await InvokeAsync(Svc.LoadAsync);
+    async Task OnIngestComplete()     => await InvokeAsync(Svc.LoadAsync);
+
+    static string Fmt(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "--";
+        var s = raw.TrimEnd();
+        if (s.Length > 7 && s[^1] == 'Z' && (s[^7] == '+' || s[^7] == '-'))
+            s = s[..^1];
+        if (!DateTimeOffset.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal, out var dto)) return "--";
+        var d = DateTimeOffset.UtcNow - dto.ToUniversalTime();
+        return d.TotalMinutes < 60 ? $"{(int)d.TotalMinutes}m ago"
+             : d.TotalHours   < 24 ? $"{(int)d.TotalHours}h ago"
+             : $"{(int)d.TotalDays}d ago";
+    }
+
+    public void Dispose()
+    {
+        Svc.OnChanged                -= OnSvcChanged;
+        SignalR.OnIntelligenceUpdate -= OnIntelligenceUpdate;
+        SignalR.OnIngestComplete     -= OnIngestComplete;
+    }
+}

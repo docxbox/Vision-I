@@ -1,0 +1,23 @@
+@layout MainLayout
+@inherits LayoutComponentBase
+@inject AuthService Auth
+
+@if (Auth.CurrentUser is null)
+{
+    @* Auth still initializing — MainLayout handles the loading state *@
+}
+else if (Auth.CurrentUser.IsAdmin)
+{
+    @Body
+}
+else
+{
+    <div class="vi-page" style="align-items:center;justify-content:center;flex:1;">
+        <div style="text-align:center;padding:48px 24px;">
+            <span class="material-symbols-outlined" style="font-size:48px;color:var(--err);">lock</span>
+            <div style="font:700 14px/1 var(--font);margin:12px 0 6px;color:var(--t);">403 — Access Denied</div>
+            <div style="font-size:12px;color:var(--tm);margin-bottom:16px;">Admin role required to view this page.</div>
+            <a class="vi-btn primary" href="/dashboard">Return to Dashboard</a>
+        </div>
+    </div>
+}

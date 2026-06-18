@@ -1,0 +1,207 @@
+@inject NavigationManager Nav
+@inject ToastService Toast
+@inject ApiService Api
+
+@if (Actions is null || !Actions.ActionItems.Any())
+{
+    <EmptyState Icon="fact_check" Message="No actions available. Refresh workspace to generate recommendations." />
+}
+else
+{
+    var visible = Actions.ActionItems.Where(a => !_dismissed.Contains(a.Title)).ToList();
+
+    @if (!visible.Any())
+    {
+        <div style="padding:16px;background:var(--s2);border-radius:var(--r2);font-size:13px;color:var(--ok);text-align:center;">
+            All actions resolved. Refresh to check for new recommendations.
+        </div>
+    }
+    else
+    {
+        var top     = visible.First();
+        var topBdr  = top.Priority switch { "high" => "var(--err)", "medium" => "var(--warn)", _ => "var(--accent)" };
+        var topCls  = top.Priority switch { "high" => "err", "medium" => "warn", _ => "" };
+        var topIcon = top.ActionType switch { "triage" => "priority_high", "investigate" => "manage_search", "verify" => "verified", _ => "notifications" };
+        var topMonitored = _monitored.Contains(top.Title);
+        var topLogged    = _logged.Contains(top.Title);
+
+        <div class="vi-panel" style="margin-bottom:16px;border-left:4px solid @topBdr;padding:20px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span class="material-symbols-outlined" style="font-size:18px;color:@topBdr;">@topIcon</span>
+                    <div class="vi-kicker">Top Priority Action</div>
+                </div>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    @if (topLogged)    { <span class="vi-chip ok"   style="font-size:10px;">LOGGED</span> }
+                    @if (topMonitored) { <span class="vi-chip info" style="font-size:10px;">MONITORING</span> }
+                    <span class="vi-chip @topCls" style="text-transform:uppercase;">@top.Priority</span>
+                </div>
+            </div>
+            <div style="font-size:15px;font-weight:600;margin-bottom:6px;">@top.Title</div>
+            <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:12px;">@top.Rationale</div>
+
+            @if (top.EvidenceEventIds.Any())
+            {
+                <div style="margin-bottom:10px;">
+                    <div class="vi-kicker" style="margin-bottom:4px;">Evidence</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:4px;">
+                        @foreach (var eid in top.EvidenceEventIds.Take(4))
+                        {
+                            <a class="vi-chip info" href="/events/@Uri.EscapeDataString(eid)?from=@Uri.EscapeDataString(Slug)" style="font-size:11px;">
+                                @(eid.Length > 14 ? eid[..14] + "…" : eid)
+                            </a>
+                        }
+                    </div>
+                </div>
+            }
+            @if (!string.IsNullOrWhiteSpace(top.RelatedEntity))
+            {
+                <div style="margin-bottom:12px;">
+                    <span class="vi-kicker">Entity: </span><span class="vi-chip">@top.RelatedEntity</span>
+                </div>
+            }
+
+            <div style="margin-bottom:12px;">
+                <label class="vi-label" style="font-size:10px;margin-bottom:4px;">Analyst note (optional)</label>
+                <textarea class="vi-input" rows="2"
+                          style="width:100%;resize:vertical;font-size:12px;"
+                          placeholder="Add rationale or note before escalating…"
+                          @bind="_analystNote"
+                          @bind:event="oninput"></textarea>
+            </div>
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid var(--bd);padding-top:12px;align-items:center;">
+                @if (!topMonitored)
+                {
+                    <button class="vi-btn primary sm" disabled="@_submitting" @onclick="() => EscalateAsync(top)">
+                        <span class="material-symbols-outlined" style="font-size:14px;">call_made</span>
+                        @(_submitting ? "Logging…" : "Escalate")
+                    </button>
+                    <button class="vi-btn sm" disabled="@_submitting" @onclick="() => SendToTriageAsync(top)">Send to Triage</button>
+                    <button class="vi-btn sm" disabled="@_submitting" @onclick="() => SetMonitorAsync(top)">
+                        <span class="material-symbols-outlined" style="font-size:14px;">visibility</span>
+                        Monitor
+                    </button>
+                    <button class="vi-btn sm" style="color:var(--tf);" @onclick="() => DismissAsync(top)">Dismiss</button>
+                }
+                else
+                {
+                    <button class="vi-btn primary sm" disabled="@_submitting" @onclick="() => EscalateAsync(top)">
+                        <span class="material-symbols-outlined" style="font-size:14px;">call_made</span>
+                        @(_submitting ? "Logging…" : "Escalate")
+                    </button>
+                    <button class="vi-btn sm" style="color:var(--ok);" disabled>
+                        <span class="material-symbols-outlined" style="font-size:14px;">check</span>
+                        Monitoring
+                    </button>
+                    <button class="vi-btn sm" style="color:var(--tf);" @onclick="() => DismissAsync(top)">Dismiss</button>
+                }
+                <span style="margin-left:auto;font-size:11px;color:var(--tf);">Confidence: @((int)(top.Confidence * 100))%</span>
+            </div>
+
+            @if (topLogged)
+            {
+                <div style="margin-top:10px;padding:8px 12px;background:rgba(63,185,80,0.08);border-radius:var(--r1);font-size:12px;color:var(--ok);">
+                    Decision logged to operations record.
+                </div>
+            }
+        </div>
+
+        @if (visible.Count > 1)
+        {
+            <div class="vi-kicker" style="margin-bottom:10px;">Queue — @(visible.Count - 1) remaining</div>
+            <div class="vi-stack" style="gap:8px;">
+                @foreach (var act in visible.Skip(1))
+                {
+                    var aCls      = act.Priority switch { "high" => "err", "medium" => "warn", _ => "" };
+                    var aIcon     = act.ActionType switch { "triage" => "priority_high", "investigate" => "manage_search", "verify" => "verified", _ => "notifications" };
+                    var aMonitored = _monitored.Contains(act.Title);
+                    var aLogged    = _logged.Contains(act.Title);
+                    <div class="vi-panel" style="padding:14px;">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+                            <div style="display:flex;align-items:center;gap:6px;flex:1;">
+                                <span class="material-symbols-outlined" style="font-size:14px;color:var(--tm);">@aIcon</span>
+                                <div style="font-size:13px;font-weight:600;">@act.Title</div>
+                            </div>
+                            <div style="display:flex;gap:6px;align-items:center;">
+                                @if (aLogged)    { <span class="vi-chip ok"   style="font-size:10px;">LOGGED</span> }
+                                @if (aMonitored) { <span class="vi-chip info" style="font-size:10px;">MONITORING</span> }
+                                <span class="vi-chip @aCls" style="text-transform:uppercase;flex-shrink:0;">@act.Priority</span>
+                            </div>
+                        </div>
+                        <div style="font-size:12px;color:var(--tf);margin-bottom:8px;">@act.Rationale</div>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                            @if (!string.IsNullOrWhiteSpace(act.RelatedEntity)) { <span class="vi-chip">@act.RelatedEntity</span> }
+                            @if (act.EvidenceEventIds.Any())
+                            {
+                                <span class="vi-chip info" style="font-size:10px;">
+                                    @act.EvidenceEventIds.Count evidence event@(act.EvidenceEventIds.Count == 1 ? "" : "s")
+                                </span>
+                            }
+                            <span style="font-size:10px;color:var(--tf);">@((int)(act.Confidence * 100))% conf.</span>
+                            <div style="margin-left:auto;display:flex;gap:6px;">
+                                <button class="vi-btn sm" disabled="@_submitting" @onclick="() => EscalateAsync(act)">Escalate</button>
+                                @if (!aMonitored)
+                                {
+                                    <button class="vi-btn sm" @onclick="() => SetMonitorAsync(act)">Monitor</button>
+                                }
+                                <button class="vi-btn sm" style="color:var(--tf);" @onclick="() => DismissAsync(act)">Dismiss</button>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    }
+}
+
+@code {
+    [Parameter] public WorkspaceActions? Actions { get; set; }
+    [Parameter] public string            Slug    { get; set; } = "";
+
+    readonly HashSet<string> _dismissed = new(StringComparer.Ordinal);
+    readonly HashSet<string> _monitored = new(StringComparer.Ordinal);
+    readonly HashSet<string> _logged    = new(StringComparer.Ordinal);
+    string _analystNote = "";
+    bool   _submitting;
+
+    async Task PostWorkspaceDecisionAsync(WorkspaceAction act, string outcome, string toastMsg)
+    {
+        if (_submitting) return;
+        _submitting = true;
+        try
+        {
+            var note      = string.IsNullOrWhiteSpace(_analystNote) ? null : _analystNote.Trim();
+            var rationale = note is null ? act.Rationale : $"{act.Rationale} | {note}";
+            var req = new WorkspaceDecisionRequest(
+                ActionTitle:      act.Title,
+                ActionType:       act.ActionType,
+                Outcome:          outcome,
+                EventId:          act.EvidenceEventIds.FirstOrDefault(),
+                Rationale:        rationale,
+                AnalystNote:      note,
+                Confidence:       act.Confidence,
+                EvidenceEventIds: act.EvidenceEventIds.Count > 0 ? act.EvidenceEventIds : null
+            );
+            await Api.CreateWorkspaceDecisionAsync(Slug, req);
+            _logged.Add(act.Title);
+            if (outcome == "monitoring") _monitored.Add(act.Title);
+            if (outcome == "dismissed")  _dismissed.Add(act.Title);
+            _analystNote = "";
+            Toast.ShowSuccess(toastMsg);
+        }
+        catch (Exception ex)
+        {
+            Toast.ShowError($"Failed to log decision: {ex.Message}");
+        }
+        finally
+        {
+            _submitting = false;
+        }
+    }
+
+    Task EscalateAsync(WorkspaceAction act)    => PostWorkspaceDecisionAsync(act, "escalated",  $"Escalated: {act.Title}");
+    Task SendToTriageAsync(WorkspaceAction act) => PostWorkspaceDecisionAsync(act, "triage",     $"Sent to triage: {act.Title}");
+    Task SetMonitorAsync(WorkspaceAction act)   => PostWorkspaceDecisionAsync(act, "monitoring", $"Monitoring: {act.Title}");
+    Task DismissAsync(WorkspaceAction act)      => PostWorkspaceDecisionAsync(act, "dismissed",  "Action dismissed.");
+}

@@ -1,0 +1,255 @@
+@page "/profile"
+@layout AnalystLayout
+@inject AuthService Auth
+@inject ApiService Api
+@inject ToastService Toast
+@inject NavigationManager Nav
+
+<PageTitle>Profile | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Account</div>
+            <h1 class="vi-h1">User Profile</h1>
+        </div>
+    </div>
+
+    @if (Auth.CurrentUser is { } u)
+    {
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px;max-width:860px;">
+
+            <!-- Profile info -->
+            <div class="vi-panel" style="padding:20px;">
+                <div class="vi-panel-hdr" style="margin-bottom:16px;">
+                    <span class="vi-panel-title">Profile</span>
+                    <span class="vi-chip info">@u.Role.ToUpperInvariant()</span>
+                </div>
+                <div class="vi-stack" style="gap:12px;">
+                    <div>
+                        <div class="vi-label" style="margin-bottom:4px;">Email</div>
+                        <div style="font:400 13px/1 var(--mono);color:var(--tm);">@u.Email</div>
+                    </div>
+                    <div>
+                        <div class="vi-label" style="margin-bottom:4px;">Display Name</div>
+                        <input class="vi-input sm" @bind="_displayName" style="width:100%;" />
+                    </div>
+                    <button class="vi-btn sm primary" disabled="@_savingProfile" @onclick="SaveProfileAsync">
+                        @(_savingProfile ? "Saving…" : "Save Name")
+                    </button>
+                </div>
+            </div>
+
+            <!-- Change password -->
+            <div class="vi-panel" style="padding:20px;">
+                <div class="vi-panel-hdr" style="margin-bottom:16px;">
+                    <span class="vi-panel-title">Change Password</span>
+                </div>
+                <div class="vi-stack" style="gap:12px;">
+                    <div>
+                        <div class="vi-label" style="margin-bottom:4px;">Current Password</div>
+                        <input type="password" class="vi-input sm" @bind="_currentPwd" style="width:100%;" />
+                    </div>
+                    <div>
+                        <div class="vi-label" style="margin-bottom:4px;">New Password</div>
+                        <input type="password" class="vi-input sm" @bind="_newPwd" style="width:100%;" />
+                    </div>
+                    <div>
+                        <div class="vi-label" style="margin-bottom:4px;">Confirm New Password</div>
+                        <input type="password" class="vi-input sm" @bind="_confirmPwd" style="width:100%;" />
+                    </div>
+                    @if (_pwdError is not null)
+                    {
+                        <div style="font-size:12px;color:var(--err);">@_pwdError</div>
+                    }
+                    <button class="vi-btn sm primary" disabled="@_savingPwd" @onclick="ChangePasswordAsync">
+                        @(_savingPwd ? "Changing…" : "Change Password")
+                    </button>
+                </div>
+            </div>
+
+            <!-- 2FA -->
+            <div class="vi-panel" style="padding:20px;">
+                <div class="vi-panel-hdr" style="margin-bottom:16px;">
+                    <span class="vi-panel-title">Two-Factor Authentication</span>
+                </div>
+                <div style="font-size:13px;color:var(--tm);margin-bottom:12px;">
+                    Protect your account with a time-based one-time password (TOTP) app.
+                </div>
+                <a class="vi-btn sm primary" href="/2fa-setup">Configure 2FA →</a>
+            </div>
+
+            <!-- Alert subscriptions -->
+            <div class="vi-panel" style="padding:20px;grid-column:1/-1;max-width:760px;">
+                <div class="vi-panel-hdr" style="margin-bottom:16px;">
+                    <span class="vi-panel-title">Alert Subscriptions</span>
+                    <button class="vi-btn sm primary" @onclick="AddSubAsync">+ Add</button>
+                </div>
+                @if (_newSubOpen)
+                {
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;padding:12px;background:var(--s1);border-radius:var(--r1);">
+                        <select class="vi-select sm" @bind="_subSeverity" style="width:130px;">
+                            <option value="">All severities</option>
+                            <option value="critical">Critical</option>
+                            <option value="high">High</option>
+                            <option value="medium">Medium</option>
+                            <option value="low">Low</option>
+                        </select>
+                        <input class="vi-input sm" placeholder="Alert type (optional)…" @bind="_subAlertType" style="width:180px;" />
+                        <input class="vi-input sm" placeholder="Entity filter (optional)…" @bind="_subEntityFilter" style="width:180px;" />
+                        <button class="vi-btn sm primary" @onclick="SaveSubAsync" disabled="@_savingSub">Save</button>
+                        <button class="vi-btn sm" @onclick="() => _newSubOpen = false">Cancel</button>
+                    </div>
+                }
+                @if (!_subscriptions.Any())
+                {
+                    <div style="font-size:12px;color:var(--tf);">No subscriptions. Add one to get notified about specific alert patterns.</div>
+                }
+                else
+                {
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead><tr><th>Severity</th><th>Alert Type</th><th>Entity</th><th></th></tr></thead>
+                            <tbody>
+                                @foreach (var s in _subscriptions)
+                                {
+                                    <tr>
+                                        <td><span class="vi-chip">@(s.Severity ?? "ALL")</span></td>
+                                        <td class="vi-td-mono">@(s.AlertType ?? "ALL")</td>
+                                        <td class="vi-td-mono">@(s.EntityFilter ?? "—")</td>
+                                        <td><button class="vi-btn sm" style="color:var(--err);"
+                                                    @onclick="() => DeleteSubAsync(s.SubscriptionId)">Remove</button></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+
+        </div>
+    }
+</div>
+
+@code {
+    string _displayName = "";
+    string _currentPwd = "", _newPwd = "", _confirmPwd = "";
+    string? _pwdError;
+    bool _savingProfile, _savingPwd;
+
+    // Subscriptions
+    List<SubscriptionItem> _subscriptions = new();
+    bool _newSubOpen, _savingSub;
+    string _subSeverity = "", _subAlertType = "", _subEntityFilter = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _displayName = Auth.CurrentUser?.DisplayName ?? "";
+        await LoadSubscriptionsAsync();
+    }
+
+    async Task LoadSubscriptionsAsync()
+    {
+        if (Auth.CurrentUser?.Id is null) return;
+        try
+        {
+            var items = await Api.GetAsync<List<SubscriptionItem>>(
+                $"api/subscriptions?user_id={Uri.EscapeDataString(Auth.CurrentUser.Id)}");
+            _subscriptions = items ?? new();
+        }
+        catch { _subscriptions = new(); }
+    }
+
+    void AddSubAsync() { _newSubOpen = true; _subSeverity = ""; _subAlertType = ""; _subEntityFilter = ""; }
+
+    async Task SaveSubAsync()
+    {
+        if (Auth.CurrentUser?.Id is null) return;
+        _savingSub = true;
+        try
+        {
+            await Api.PostAsync<object>(
+                $"api/subscriptions?user_id={Uri.EscapeDataString(Auth.CurrentUser.Id)}",
+                new { severity = _subSeverity.Length > 0 ? _subSeverity : null as string,
+                      alert_type = _subAlertType.Length > 0 ? _subAlertType : null as string,
+                      entity_filter = _subEntityFilter.Length > 0 ? _subEntityFilter : null as string });
+            _newSubOpen = false;
+            Toast.ShowSuccess("Subscription added.");
+            await LoadSubscriptionsAsync();
+        }
+        catch { Toast.ShowError("Failed to add subscription."); }
+        finally { _savingSub = false; }
+    }
+
+    async Task DeleteSubAsync(string subId)
+    {
+        if (Auth.CurrentUser?.Id is null) return;
+        await Api.DeleteAsync($"api/subscriptions/{subId}?user_id={Uri.EscapeDataString(Auth.CurrentUser.Id)}");
+        _subscriptions.RemoveAll(s => s.SubscriptionId == subId);
+        StateHasChanged();
+    }
+
+    class SubscriptionItem
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("subscription_id")]
+        public string SubscriptionId { get; set; } = "";
+        [System.Text.Json.Serialization.JsonPropertyName("severity")]
+        public string? Severity { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("alert_type")]
+        public string? AlertType { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("entity_filter")]
+        public string? EntityFilter { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("is_active")]
+        public bool IsActive { get; set; }
+    }
+
+    async Task SaveProfileAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_displayName)) return;
+        _savingProfile = true;
+        try
+        {
+            var (result, err) = await Api.PostWithErrorAsync<object>(
+                "api/auth/profile", new { display_name = _displayName });
+            if (err is null)
+                Toast.ShowSuccess("Display name updated.");
+            else
+                Toast.ShowError(err);
+        }
+        finally { _savingProfile = false; }
+    }
+
+    async Task ChangePasswordAsync()
+    {
+        _pwdError = null;
+        if (string.IsNullOrWhiteSpace(_currentPwd) || string.IsNullOrWhiteSpace(_newPwd))
+        {
+            _pwdError = "All fields are required."; return;
+        }
+        if (_newPwd != _confirmPwd)
+        {
+            _pwdError = "New passwords do not match."; return;
+        }
+        if (_newPwd.Length < 8)
+        {
+            _pwdError = "New password must be at least 8 characters."; return;
+        }
+        _savingPwd = true;
+        try
+        {
+            var (result, err) = await Api.PostWithErrorAsync<object>(
+                "api/auth/change-password",
+                new { current_password = _currentPwd, new_password = _newPwd });
+            if (err is null)
+            {
+                Toast.ShowSuccess("Password changed.");
+                _currentPwd = _newPwd = _confirmPwd = "";
+            }
+            else
+            {
+                _pwdError = err;
+            }
+        }
+        finally { _savingPwd = false; }
+    }
+}

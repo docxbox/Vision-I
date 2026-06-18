@@ -1,0 +1,709 @@
+@page "/sources"
+@inject SourcesService Svc
+@inject ApiService Api
+@inject ToastService Toast
+@implements IDisposable
+@using System.Text.Json
+
+<PageTitle>Sources | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Explain / Sources</div>
+            <h1 class="vi-h1">Intelligence Sources</h1>
+            <div class="vi-sub">SOURCE CATALOG · HEALTH · OPERATIONAL QUERY</div>
+        </div>
+        <div class="vi-page-actions">
+            <span class="vi-chip info">@Svc.CatalogRows.Count sources</span>
+            <button class="vi-btn" @onclick="Svc.LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Total Sources</div>
+            <div class="vi-metric-val accent">@Svc.CatalogRows.Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Healthy</div>
+            <div class="vi-metric-val ok">@Svc.CatalogRows.Count(r => r.Status == "HEALTHY")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Degraded</div>
+            <div class="vi-metric-val warn">@Svc.CatalogRows.Count(r => r.Status == "DEGRADED")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Not Configured</div>
+            <div class="vi-metric-val warn">@Svc.CatalogRows.Count(r => r.Status == "NOT CONFIGURED")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Down</div>
+            <div class="vi-metric-val err">@Svc.CatalogRows.Count(r => r.Status == "DOWN")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Unknown</div>
+            <div class="vi-metric-val">@Svc.CatalogRows.Count(r => r.Status == "UNKNOWN")</div>
+        </div>
+    </div>
+
+    <!-- Page tabs -->
+    <div class="vi-filter-bar">
+        <button class="vi-btn sm @(_pageTab == "cat"   ? "primary" : "")" @onclick='() => _pageTab = "cat"'>Catalog</button>
+        <button class="vi-btn sm @(_pageTab == "query" ? "primary" : "")" @onclick='() => _pageTab = "query"'>Operational Query</button>
+    </div>
+
+    <!-- ── CATALOG ── -->
+    @if (_pageTab == "cat")
+    {
+        <div class="vi-panel" style="flex:1;min-height:0;">
+            <div class="vi-panel-hdr"><span class="vi-panel-title">Source Catalog</span></div>
+            @if (!Svc.CatalogRows.Any())
+            {
+                <div class="vi-empty">
+                    <span class="material-symbols-outlined">feed</span>
+                    No sources configured
+                </div>
+            }
+            else
+            {
+                <div class="vi-tbl-wrap">
+                    <table class="vi-table">
+                        <thead>
+                            <tr>
+                                <th>Source</th>
+                                <th>Category</th>
+                                <th>Driver</th>
+                                <th>Status</th>
+                                <th>Credibility</th>
+                                <th>Action</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var s in Svc.CatalogRows)
+                            {
+                                var credKey = s.Label.ToLowerInvariant();
+                                _credScores.TryGetValue(credKey, out var cred);
+                                <tr>
+                                    <td><div class="vi-td-title">@s.Label</div></td>
+                                    <td class="vi-td-mono">@s.Category</td>
+                                    <td class="vi-td-mono vi-faint">@s.Driver</td>
+                                    <td><span class="vi-chip @StatusCls(s.Status)">@s.Status</span></td>
+                                    <td>
+                                        @if (cred.HasValue)
+                                        {
+                                            <span class="vi-chip @CredCls(cred.Value)" title="Analyst credibility score">@cred.Value.ToString("0.0")</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="vi-faint" style="font-size:11px;">—</span>
+                                        }
+                                        <button class="vi-btn sm" style="margin-left:4px;" title="Flag credibility"
+                                                @onclick="() => OpenCredDialog(s.Label)">⚑</button>
+                                    </td>
+                                    <td class="vi-td-note vi-faint">@s.Action</td>
+                                    <td>
+                                        <button class="vi-btn sm" @onclick="() => QuerySource(s.Label)">Query</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    }
+
+    <!-- ── OPERATIONAL QUERY ── -->
+    @if (_pageTab == "query")
+    {
+        <div class="vi-split" style="flex:1;min-height:0;">
+
+            <!-- Left: config panel -->
+            <div class="vi-stack" style="min-width:260px;max-width:320px;">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Source</span></div>
+                    <div class="vi-panel-body vi-stack">
+                        <!-- Source selector -->
+                        <div class="vi-field">
+                            <label class="vi-label">Source</label>
+                            <select class="vi-input" @bind="_src" @bind:after="OnSourceChanged">
+                                @foreach (var s in _allSources)
+                                {
+                                    <option value="@s.Key">@s.Value</option>
+                                }
+                            </select>
+                        </div>
+
+                        <!-- Shared: query text (for text-based sources) -->
+                        @if (NeedsQuery(_src))
+                        {
+                            <div class="vi-field">
+                                <label class="vi-label">Query</label>
+                                <input class="vi-input" placeholder="Keywords…" @bind="_query" @onkeyup="OnKey" />
+                            </div>
+                        }
+
+                        <!-- Shared: limit -->
+                        <div class="vi-field">
+                            <label class="vi-label">Limit</label>
+                            <input class="vi-input" type="number" @bind="_limit" min="1" max="@MaxLimit(_src)" />
+                        </div>
+
+                        <!-- Source-specific params -->
+                        @if (_src == "news")
+                        {
+                            <div class="vi-field">
+                                <label class="vi-label">Days Back</label>
+                                <input class="vi-input" type="number" @bind="_newsDaysBack" min="1" max="30" />
+                            </div>
+                            <div class="vi-field">
+                                <label class="vi-label">Language</label>
+                                <select class="vi-input" @bind="_newsLanguage">
+                                    <option value="en">English</option>
+                                    <option value="fr">French</option>
+                                    <option value="de">German</option>
+                                    <option value="es">Spanish</option>
+                                    <option value="ar">Arabic</option>
+                                    <option value="zh">Chinese</option>
+                                </select>
+                            </div>
+                            <div class="vi-field">
+                                <label class="vi-label">Sort By</label>
+                                <select class="vi-input" @bind="_newsSortBy">
+                                    <option value="publishedAt">Latest</option>
+                                    <option value="relevancy">Relevancy</option>
+                                    <option value="popularity">Popularity</option>
+                                </select>
+                            </div>
+                        }
+
+                        @if (_src == "reddit")
+                        {
+                            <div class="vi-field">
+                                <label class="vi-label">Sort</label>
+                                <select class="vi-input" @bind="_redditSort">
+                                    <option value="new">New</option>
+                                    <option value="hot">Hot</option>
+                                    <option value="relevance">Relevance</option>
+                                    <option value="top">Top</option>
+                                </select>
+                            </div>
+                            <div class="vi-field">
+                                <label class="vi-label">Subreddit (optional)</label>
+                                <input class="vi-input" placeholder="e.g. worldnews" @bind="_redditSub" />
+                            </div>
+                        }
+
+                        @if (_src == "twitter")
+                        {
+                            <div class="vi-field">
+                                <label class="vi-label">Language</label>
+                                <select class="vi-input" @bind="_twitterLang">
+                                    <option value="en">English</option>
+                                    <option value="fr">French</option>
+                                    <option value="de">German</option>
+                                    <option value="es">Spanish</option>
+                                    <option value="ar">Arabic</option>
+                                </select>
+                            </div>
+                        }
+
+                        @if (_src == "gdelt")
+                        {
+                            <div class="vi-field">
+                                <label class="vi-label">APIs</label>
+                                <input class="vi-input" placeholder="doc,geo" @bind="_gdeltApis" />
+                            </div>
+                        }
+
+                        @if (_src == "usgs")
+                        {
+                            <div class="vi-field">
+                                <label class="vi-label">Min Magnitude</label>
+                                <input class="vi-input" type="number" @bind="_usgsMag" min="0" max="10" step="0.1" />
+                            </div>
+                            <div class="vi-field">
+                                <label class="vi-label">Hours Back</label>
+                                <input class="vi-input" type="number" @bind="_usgsHours" min="1" max="168" />
+                            </div>
+                        }
+
+                        @if (_src == "stocks")
+                        {
+                            <div class="vi-field">
+                                <label class="vi-label">Tickers (comma-separated)</label>
+                                <input class="vi-input" placeholder="AAPL,TSLA,NVDA" @bind="_stockTickers" />
+                            </div>
+                        }
+
+                        @if (_src == "opensky")
+                        {
+                            <div class="vi-field">
+                                <label class="vi-label">Callsign (optional)</label>
+                                <input class="vi-input" placeholder="e.g. BAW" @bind="_osCallsign" />
+                            </div>
+                            <div class="vi-field">
+                                <label class="vi-label">Airborne Only</label>
+                                <select class="vi-input" @bind="_osAirborne">
+                                    <option value="false">All</option>
+                                    <option value="true">Airborne Only</option>
+                                </select>
+                            </div>
+                        }
+
+                        <button class="vi-btn primary" disabled="@(_running || (NeedsQuery(_src) && string.IsNullOrWhiteSpace(_query)))"
+                                @onclick="RunQueryAsync">
+                            @(_running ? "Fetching…" : "Fetch")
+                        </button>
+
+                        @if (!string.IsNullOrWhiteSpace(_error))
+                        {
+                            <div class="vi-faint err" style="font-size:11px;padding:4px;">@_error</div>
+                        }
+                    </div>
+                </div>
+
+                <!-- Source readiness + info -->
+                @{
+                    var catalogStatus = Svc.CatalogRows
+                        .FirstOrDefault(r => r.Label.Equals(_allSources.GetValueOrDefault(_src, _src), StringComparison.OrdinalIgnoreCase)
+                                          || r.Label.Equals(_src, StringComparison.OrdinalIgnoreCase))?.Status ?? "";
+                }
+                @if (catalogStatus == "NOT CONFIGURED")
+                {
+                    <div class="vi-panel" style="border-left:3px solid var(--warn);">
+                        <div class="vi-panel-body vi-row" style="gap:6px;align-items:center;">
+                            <span class="material-symbols-outlined" style="color:var(--warn);font-size:16px;">warning</span>
+                            <span class="vi-faint" style="font-size:12px;">Source not configured — results may fail or be empty. Check credentials in environment.</span>
+                        </div>
+                    </div>
+                }
+                else if (catalogStatus == "DOWN")
+                {
+                    <div class="vi-panel" style="border-left:3px solid var(--err);">
+                        <div class="vi-panel-body vi-row" style="gap:6px;align-items:center;">
+                            <span class="material-symbols-outlined" style="color:var(--err);font-size:16px;">error</span>
+                            <span class="vi-faint" style="font-size:12px;">Source is DOWN — query will likely fail. Check Admin → Health for details.</span>
+                        </div>
+                    </div>
+                }
+                else if (catalogStatus == "DEGRADED")
+                {
+                    <div class="vi-panel" style="border-left:3px solid var(--warn);">
+                        <div class="vi-panel-body vi-row" style="gap:6px;align-items:center;">
+                            <span class="material-symbols-outlined" style="color:var(--warn);font-size:16px;">network_check</span>
+                            <span class="vi-faint" style="font-size:12px;">Source is DEGRADED â€” recent ingest exists, but health or freshness needs attention.</span>
+                        </div>
+                    </div>
+                }
+                else if (catalogStatus == "UNKNOWN")
+                {
+                    <div class="vi-panel" style="border-left:3px solid var(--accent);">
+                        <div class="vi-panel-body vi-row" style="gap:6px;align-items:center;">
+                            <span class="material-symbols-outlined" style="color:var(--accent);font-size:16px;">help</span>
+                            <span class="vi-faint" style="font-size:12px;">Source health is UNKNOWN â€” no trustworthy readiness signal has been recorded yet.</span>
+                        </div>
+                    </div>
+                }
+                <div class="vi-panel soft">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">@_allSources.GetValueOrDefault(_src, _src)</span>
+                        @if (!string.IsNullOrEmpty(catalogStatus))
+                        {
+                            <span class="vi-chip @StatusCls(catalogStatus)" style="font-size:10px;">@catalogStatus</span>
+                        }
+                    </div>
+                    <div class="vi-panel-body">
+                        <div style="font-size:12px;color:var(--tm);line-height:1.7;">@SourceDescription(_src)</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: results -->
+            <div class="vi-panel" style="flex:1;min-height:0;overflow:auto;">
+                <div class="vi-panel-hdr">
+                    <span class="vi-panel-title">Results</span>
+                    @if (_result.HasValue)
+                    {
+                        <span class="vi-chip info">@_resultTotal results</span>
+                        @if (!string.IsNullOrWhiteSpace(_resultWarning))
+                        {
+                            <span class="vi-chip warn">@_resultWarning</span>
+                        }
+                    }
+                </div>
+
+                @if (_running)
+                {
+                    <div class="vi-loading" style="padding:32px;">FETCHING FROM @_src.ToUpperInvariant()</div>
+                }
+                else if (!_result.HasValue)
+                {
+                    <div class="vi-empty">
+                        <span class="material-symbols-outlined">sensors</span>
+                        Configure params and press Fetch
+                    </div>
+                }
+                else if (_resultEvents.Count == 0)
+                {
+                    <div class="vi-empty">Query returned no events</div>
+                }
+                else
+                {
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Source</th>
+                                    <th>Type</th>
+                                    <th>Sentiment</th>
+                                    <th>Title / Content</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var e in _resultEvents)
+                                {
+                                    var sent  = GetStr(e, "sentiment_label", "polarity");
+                                    var score = GetDbl(e, "sentiment_score", "score");
+                                    <tr>
+                                        <td class="vi-td-mono vi-faint">@FmtTs(GetStr(e, "timestamp", "published_at", "ingest_time"))</td>
+                                        <td class="vi-td-mono vi-faint">@(GetStr(e, "source").ToUpperInvariant())</td>
+                                        <td class="vi-td-mono vi-faint">@GetStr(e, "event_type", "type")</td>
+                                        <td>
+                                            @if (sent != "--")
+                                            {
+                                                <span class="vi-chip @SentCls(sent)">@sent</span>
+                                            }
+                                            else if (score != 0)
+                                            {
+                                                <span class="vi-td-mono" style="color:@SentScoreColor(score);">@score.ToString("0.00")</span>
+                                            }
+                                        </td>
+                                        <td class="vi-td-title vi-trunc" style="max-width:400px;">
+                                            @GetStr(e, "title", "content", "description", "body")
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@if (_credDialogOpen)
+{
+    <div class="vi-search-overlay" @onclick="() => _credDialogOpen = false">
+        <div class="vi-search-box" style="max-width:380px;" @onclick:stopPropagation>
+            <div class="vi-search-hdr">
+                <span class="material-symbols-outlined" style="color:var(--tf);">flag</span>
+                <span style="font:700 13px/1 var(--mono);color:var(--t);">Flag: @_credSourceName</span>
+            </div>
+            <div style="padding:16px;display:flex;flex-direction:column;gap:12px;">
+                <div>
+                    <div class="vi-label" style="margin-bottom:6px;">Credibility Score: @_credValue.ToString("0.1")</div>
+                    <input type="range" min="0" max="1" step="0.05" style="width:100%;"
+                           value="@_credValue"
+                           @oninput="OnCredSliderInput" />
+                    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--tf);margin-top:2px;">
+                        <span>Unreliable (0)</span><span>Moderate (0.5)</span><span>Authoritative (1)</span>
+                    </div>
+                </div>
+                <div>
+                    <div class="vi-label" style="margin-bottom:4px;">Note (optional)</div>
+                    <input class="vi-input sm" placeholder="Reason for rating…" @bind="_credNote" style="width:100%;" />
+                </div>
+                <div style="display:flex;gap:8px;">
+                    <button class="vi-btn sm primary" @onclick="SaveCredAsync">Save</button>
+                    <button class="vi-btn sm" @onclick="() => _credDialogOpen = false">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    // Source credibility state
+    Dictionary<string, double?> _credScores = new();
+    bool _credDialogOpen;
+    string _credSourceName = "";
+    double _credValue = 0.5;
+    string _credNote = "";
+
+    void OpenCredDialog(string sourceName)
+    {
+        _credSourceName = sourceName;
+        _credScores.TryGetValue(sourceName.ToLowerInvariant(), out var existing);
+        _credValue = existing.HasValue && existing.Value > 0 ? existing.Value : 0.7;
+        _credNote = "";
+        _credDialogOpen = true;
+    }
+
+    async Task SaveCredAsync()
+    {
+        try
+        {
+            await Api.PatchAsync<object>(
+                $"api/sources/{Uri.EscapeDataString(_credSourceName)}/credibility",
+                new { credibility_score = _credValue, credibility_note = _credNote });
+            _credScores[_credSourceName.ToLowerInvariant()] = (double?)_credValue;
+            Toast.ShowSuccess($"Credibility set for {_credSourceName}.");
+        }
+        catch { Toast.ShowError("Failed to save credibility."); }
+        _credDialogOpen = false;
+        StateHasChanged();
+    }
+
+    void OnCredSliderInput(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Any,
+                            System.Globalization.CultureInfo.InvariantCulture, out var v))
+            _credValue = v;
+    }
+
+    static string CredCls(double s) => s >= 0.8 ? "ok" : s >= 0.5 ? "warn" : "err";
+
+    string _pageTab = "cat";
+    bool _running;
+    string _error = "";
+    string _resultWarning = "";
+    int _resultTotal;
+    JsonElement? _result;
+    List<JsonElement> _resultEvents = new();
+
+    // Shared params
+    string _src   = "news";
+    string _query = "";
+    int    _limit = 20;
+
+    // news
+    int    _newsDaysBack = 1;
+    string _newsLanguage = "en";
+    string _newsSortBy   = "publishedAt";
+
+    // reddit
+    string _redditSort = "new";
+    string _redditSub  = "";
+
+    // twitter
+    string _twitterLang = "en";
+
+    // gdelt
+    string _gdeltApis = "doc,geo";
+
+    // usgs
+    double _usgsMag   = 4.0;
+    int    _usgsHours = 24;
+
+    // stocks
+    string _stockTickers = "";
+
+    // opensky
+    string _osCallsign = "";
+    string _osAirborne = "false";
+
+    readonly Dictionary<string, string> _allSources = new()
+    {
+        ["news"]       = "NewsAPI",
+        ["reddit"]     = "Reddit",
+        ["youtube"]    = "YouTube",
+        ["rss"]        = "RSS / Atom",
+        ["hackernews"] = "Hacker News",
+        ["telegram"]   = "Telegram",
+        ["twitter"]    = "Twitter / X",
+        ["gdelt"]      = "GDELT",
+        ["usgs"]       = "USGS Earthquakes",
+        ["stocks"]     = "Stocks (Yahoo Finance)",
+        ["opensky"]    = "OpenSky (Flights)",
+        ["ais"]        = "AIS (Vessels)",
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    void OnSourceChanged() { _result = null; _resultEvents = new(); _error = ""; }
+
+    void QuerySource(string label)
+    {
+        var key = _allSources.FirstOrDefault(kv => kv.Value.Equals(label, StringComparison.OrdinalIgnoreCase)).Key
+                  ?? label.ToLowerInvariant();
+        if (_allSources.ContainsKey(key)) _src = key;
+        _pageTab = "query";
+        _result = null; _resultEvents = new();
+        StateHasChanged();
+    }
+
+    async Task OnKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await RunQueryAsync();
+    }
+
+    async Task RunQueryAsync()
+    {
+        _running = true; _error = ""; _result = null; _resultEvents = new(); _resultWarning = "";
+        try
+        {
+            var url = BuildUrl();
+            var raw = await Api.GetAsync<JsonElement?>($"api/sources/{_src}?{url}");
+            _result = raw;
+
+            if (_result.HasValue)
+            {
+                // status 202 = cache warming
+                if (_result.Value.TryGetProperty("status", out var st) && st.GetString() == "warming")
+                {
+                    _resultWarning = "Cache warming — retry in a moment";
+                    _resultEvents  = new();
+                    _resultTotal   = 0;
+                }
+                else
+                {
+                    _resultEvents = GetArr(_result.Value, "events");
+                    _resultTotal  = _result.Value.TryGetProperty("total", out var tot) && tot.TryGetInt32(out var t) ? t : _resultEvents.Count;
+                    _resultWarning = _result.Value.TryGetProperty("warning", out var w) ? (w.GetString() ?? "") : "";
+                }
+            }
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _running = false; }
+    }
+
+    string BuildUrl()
+    {
+        var parts = new List<string> { $"limit={_limit}", "fast=false" };
+
+        if (NeedsQuery(_src) && !string.IsNullOrWhiteSpace(_query))
+            parts.Add($"query={Uri.EscapeDataString(_query)}");
+
+        switch (_src)
+        {
+            case "news":
+                parts.Add($"days_back={_newsDaysBack}");
+                parts.Add($"language={Uri.EscapeDataString(_newsLanguage)}");
+                parts.Add($"sort_by={Uri.EscapeDataString(_newsSortBy)}");
+                break;
+            case "reddit":
+                parts.Add($"sort={Uri.EscapeDataString(_redditSort)}");
+                if (!string.IsNullOrWhiteSpace(_redditSub))
+                    parts.Add($"subreddit={Uri.EscapeDataString(_redditSub)}");
+                break;
+            case "twitter":
+                parts.Add($"lang={Uri.EscapeDataString(_twitterLang)}");
+                break;
+            case "gdelt":
+                parts.Add($"apis={Uri.EscapeDataString(_gdeltApis)}");
+                break;
+            case "usgs":
+                parts.Add($"min_mag={_usgsMag.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}");
+                parts.Add($"hours_back={_usgsHours}");
+                break;
+            case "stocks":
+                if (!string.IsNullOrWhiteSpace(_stockTickers))
+                    parts.Add($"tickers={Uri.EscapeDataString(_stockTickers)}");
+                break;
+            case "opensky":
+                if (!string.IsNullOrWhiteSpace(_osCallsign))
+                    parts.Add($"callsign={Uri.EscapeDataString(_osCallsign)}");
+                parts.Add($"airborne_only={_osAirborne}");
+                break;
+        }
+
+        return string.Join("&", parts);
+    }
+
+    static bool NeedsQuery(string src) => src is "news" or "reddit" or "youtube" or "rss" or "hackernews" or "telegram" or "twitter" or "gdelt";
+
+    static int MaxLimit(string src) => src is "opensky" or "ais" ? 200 : src is "twitter" ? 100 : 50;
+
+    static string SourceDescription(string src) => src switch
+    {
+        "news"       => "NewsAPI — full-text search across 150,000+ news sources. Requires NEWSAPI_KEY.",
+        "reddit"     => "Reddit public JSON API. No credentials required. Search by keyword and subreddit.",
+        "youtube"    => "YouTube video search via yt-dlp. No API key required.",
+        "rss"        => "Curated global + finance RSS/Atom feeds. No credentials required.",
+        "hackernews" => "Hacker News Algolia search API. No credentials required.",
+        "telegram"   => "Telegram public channel search (t.me). No credentials required.",
+        "twitter"    => "X/Twitter recent search via v2 API. Requires TWITTER_BEARER_TOKEN.",
+        "gdelt"      => "GDELT GKG — global news event database. No credentials. Use 'doc', 'geo', 'context', or 'tv' APIs.",
+        "usgs"       => "USGS real-time earthquake feed. No credentials. Filter by magnitude, region, and time window.",
+        "stocks"     => "Yahoo Finance ticker data. No credentials required. Comma-separate ticker symbols.",
+        "opensky"    => "OpenSky live flight positions. No credentials (anonymous rate limit applies). Filter by callsign or bounding box.",
+        "ais"        => "AIS vessel tracking (aisstream.io). May require AIS_API_KEY.",
+        _            => "No description available."
+    };
+
+    static string GetStr(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+        {
+            if (!el.TryGetProperty(k, out var v)) continue;
+            if (v.ValueKind == JsonValueKind.String) return v.GetString() ?? "--";
+            if (v.ValueKind == JsonValueKind.Object)
+            {
+                // Handle nested sentiment object
+                if (v.TryGetProperty("label", out var lbl) && lbl.ValueKind == JsonValueKind.String)
+                    return lbl.GetString() ?? "--";
+            }
+            return v.ToString();
+        }
+        return "--";
+    }
+
+    static double GetDbl(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+        {
+            if (!el.TryGetProperty(k, out var v)) continue;
+            if (v.ValueKind == JsonValueKind.Number) return v.GetDouble();
+            if (v.ValueKind == JsonValueKind.Object && v.TryGetProperty("score", out var sc) && sc.ValueKind == JsonValueKind.Number)
+                return sc.GetDouble();
+        }
+        return 0;
+    }
+
+    static List<JsonElement> GetArr(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Array)
+                return v.EnumerateArray().ToList();
+        return new();
+    }
+
+    static string FmtTs(string? ts)
+    {
+        if (string.IsNullOrWhiteSpace(ts) || ts == "--") return "--";
+        return ts.Length >= 16 ? ts[..16].Replace("T", " ") : ts;
+    }
+
+    static string StatusCls(string s) => s switch
+    {
+        "HEALTHY"        => "ok",
+        "STANDBY"        => "info",
+        "DEGRADED"       => "warn",
+        "NOT CONFIGURED" => "warn",
+        "DOWN"           => "err",
+        _                => ""
+    };
+
+    static string SentCls(string s) => s.ToUpperInvariant() switch
+    {
+        "POSITIVE" => "ok",
+        "NEGATIVE" => "err",
+        _          => ""
+    };
+
+    static string SentScoreColor(double v) =>
+        v >= 0.6 ? "var(--ok)" : v < 0.4 ? "var(--err)" : "var(--t2)";
+
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+}

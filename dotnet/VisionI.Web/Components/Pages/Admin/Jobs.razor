@@ -1,0 +1,177 @@
+@page "/admin/jobs"
+@layout AdminLayout
+@inject AdminJobsService Svc
+@implements IDisposable
+
+<PageTitle>Jobs | Vision-I Admin</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Admin / Jobs</div>
+            <h1 class="vi-h1">Background Jobs</h1>
+            <div class="vi-sub">INGEST HISTORY · JOB MONITORING · RETRY</div>
+        </div>
+        <div class="vi-page-actions">
+            <span class="vi-chip info">@Svc.Rows.Count jobs</span>
+            <button class="vi-btn" @onclick="Svc.LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Total</div>
+            <div class="vi-metric-val accent">@Svc.Rows.Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Completed</div>
+            <div class="vi-metric-val ok">@Svc.Rows.Count(r => r.Status is "completed" or "complete" or "success")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Failed</div>
+            <div class="vi-metric-val err">@Svc.Rows.Count(r => r.Status is "failed" or "error")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Running</div>
+            <div class="vi-metric-val warn">@Svc.Rows.Count(r => r.Status is "running" or "pending")</div>
+        </div>
+    </div>
+
+    @if (!Svc.Rows.Any())
+    {
+        <div class="vi-empty">
+            <span class="material-symbols-outlined">work_history</span>
+            No jobs recorded
+        </div>
+    }
+    else
+    {
+        <div class="vi-split" style="flex:1;min-height:0;">
+            <div class="vi-panel" style="flex:1;min-height:0;">
+                <div class="vi-panel-hdr"><span class="vi-panel-title">Job History</span></div>
+                <div class="vi-tbl-wrap">
+                    <table class="vi-table">
+                        <thead>
+                            <tr>
+                                <th>Job ID</th>
+                                <th>Status</th>
+                                <th>Sources</th>
+                                <th>Events</th>
+                                <th>Duration</th>
+                                <th>Started</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var j in Svc.Rows)
+                            {
+                                <tr class="@(Svc.Selected?.JobId == j.JobId ? "sel" : "")"
+                                    style="cursor:pointer;"
+                                    @onclick="() => Svc.Select(j)">
+                                    <td class="vi-td-mono vi-faint">@j.JobId[..Math.Min(8, j.JobId.Length)]</td>
+                                    <td><span class="vi-chip @AdminJobsService.Cls(j.Status)">@j.Status.ToUpperInvariant()</span></td>
+                                    <td class="vi-td-mono vi-trunc" style="max-width:120px;">@j.Sources</td>
+                                    <td class="vi-td-mono @(j.Count != "0" && j.Count != "-" ? "ok" : "vi-faint")">@j.Count</td>
+                                    <td class="vi-td-mono vi-faint">@j.Duration</td>
+                                    <td class="vi-td-mono vi-faint">@FmtTime(j.StartedAt)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Job detail panel -->
+            <div class="vi-panel soft">
+                @if (Svc.Selected is { } sel)
+                {
+                    var isFailed = sel.Status is "failed" or "error";
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title vi-mono" style="font-size:11px;">@sel.JobId</span>
+                        <span class="vi-chip @AdminJobsService.Cls(sel.Status)">@sel.Status.ToUpperInvariant()</span>
+                    </div>
+                    <div class="vi-panel-body vi-stack">
+                        <div class="vi-detail">
+                            <div class="vi-detail-row">
+                                <span class="vi-detail-key">Events</span>
+                                <span class="vi-detail-val @(sel.Count != "0" && sel.Count != "-" ? "ok" : "warn")">@sel.Count</span>
+                            </div>
+                            <div class="vi-detail-row">
+                                <span class="vi-detail-key">Sources</span>
+                                <span class="vi-detail-val vi-mono">@sel.Sources</span>
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(sel.Query))
+                            {
+                                <div class="vi-detail-row">
+                                    <span class="vi-detail-key">Query</span>
+                                    <span class="vi-detail-val vi-trunc" style="max-width:200px;">@sel.Query</span>
+                                </div>
+                            }
+                            <div class="vi-detail-row">
+                                <span class="vi-detail-key">Duration</span>
+                                <span class="vi-detail-val vi-mono vi-faint">@sel.Duration</span>
+                            </div>
+                            <div class="vi-detail-row">
+                                <span class="vi-detail-key">Started</span>
+                                <span class="vi-detail-val vi-mono vi-faint">@sel.StartedAt</span>
+                            </div>
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(sel.Error))
+                        {
+                            <div class="vi-panel" style="background:rgba(248,113,113,.06);border-left:2px solid var(--err);padding:8px;">
+                                <div class="vi-label err" style="margin-bottom:3px;">Error</div>
+                                <div class="vi-td-mono" style="font-size:11px;color:var(--err);">@sel.Error</div>
+                            </div>
+                        }
+
+                        @if (isFailed)
+                        {
+                            <div class="vi-row" style="gap:8px;align-items:center;">
+                                <button class="vi-btn primary" disabled="@Svc.Retrying"
+                                        @onclick="() => Svc.RetryJobAsync(sel)">
+                                    @(Svc.Retrying ? "Retrying…" : "Retry Job")
+                                </button>
+                                @if (!string.IsNullOrWhiteSpace(Svc.RetryMsg))
+                                {
+                                    <span class="vi-faint" style="font-size:12px;">@Svc.RetryMsg</span>
+                                }
+                            </div>
+                        }
+
+                        <div class="vi-row" style="gap:6px;">
+                            <a class="vi-btn sm" href="/ingest">Ingest →</a>
+                            @if (sel.Count != "0" && sel.Count != "-")
+                            {
+                                <a class="vi-btn sm" href="/live-events">View Events →</a>
+                            }
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="vi-empty">
+                        <span class="material-symbols-outlined">work_history</span>
+                        Select a job to inspect
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+
+    static string FmtTime(string ts)
+    {
+        if (string.IsNullOrWhiteSpace(ts) || ts == "-") return "--";
+        return ts.Length >= 16 ? ts[..16].Replace("T", " ") : ts;
+    }
+}

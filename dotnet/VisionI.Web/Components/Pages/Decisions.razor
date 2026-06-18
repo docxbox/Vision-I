@@ -1,0 +1,177 @@
+@page "/decisions"
+@layout AnalystLayout
+@inject DecisionsService Svc
+@implements IDisposable
+
+<PageTitle>Decisions | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Record / Decisions</div>
+            <h1 class="vi-h1">Decision Ledger</h1>
+            <div class="vi-sub">ANALYST ACTIONS · OUTCOME TRACKING</div>
+        </div>
+        <div class="vi-page-actions">
+            <a class="vi-btn sm" href="/operations">Operations →</a>
+            <a class="vi-btn sm" href="/triage">Triage →</a>
+            <button class="vi-btn" disabled="@Svc.Loading" @onclick="Svc.LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Total</div>
+            <div class="vi-metric-val accent">@Svc.DecisionCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Open</div>
+            <div class="vi-metric-val warn">@Svc.OpenCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">With Outcomes</div>
+            <div class="vi-metric-val ok">@Svc.OutcomeCount</div>
+        </div>
+    </div>
+
+    <div class="vi-split wide" style="flex:1;min-height:0;">
+        <!-- Left: log form + ledger -->
+        <div class="vi-stack" style="min-height:0;overflow-y:auto;">
+            <!-- Log form -->
+            <div class="vi-panel">
+                <div class="vi-panel-hdr"><span class="vi-panel-title">Log New Decision</span></div>
+                <div class="vi-panel-body vi-stack">
+                    <div class="vi-form-row">
+                        <div class="vi-field" style="flex:1;">
+                            <label class="vi-label">Context ID</label>
+                            <input class="vi-input" placeholder="Event or situation reference…" @bind="Svc.CtxId" />
+                        </div>
+                        <div class="vi-field" style="flex:2;">
+                            <label class="vi-label">Action</label>
+                            <input class="vi-input" placeholder="Decision taken…" @bind="Svc.Action" />
+                        </div>
+                    </div>
+                    <div class="vi-field">
+                        <label class="vi-label">Rationale</label>
+                        <input class="vi-input" placeholder="Why this action was taken…" @bind="Svc.Rationale" />
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(Svc.Error))
+                    {
+                        <div class="vi-err">@Svc.Error</div>
+                    }
+                    <button class="vi-btn primary" style="align-self:flex-start;"
+                            disabled="@string.IsNullOrWhiteSpace(Svc.Action)"
+                            @onclick="Svc.CreateAsync">
+                        Log Decision
+                    </button>
+                </div>
+            </div>
+
+            <!-- Decision table -->
+            @if (Svc.Loading)
+            {
+                <div class="vi-loading">LOADING</div>
+            }
+            else if (!Svc.DecisionRows().Any())
+            {
+                <div class="vi-empty">No decisions recorded yet</div>
+            }
+            else
+            {
+                <div class="vi-panel" style="flex:1;min-height:0;">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Decision Ledger</span>
+                        <span class="vi-chip">@Svc.DecisionRows().Count rows</span>
+                    </div>
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead>
+                                <tr>
+                                    <th>Action</th>
+                                    <th>Context</th>
+                                    <th>Driver</th>
+                                    <th>Analyst</th>
+                                    <th>Logged</th>
+                                    <th>Outcome</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var d in Svc.DecisionRows())
+                                {
+                                    <tr>
+                                        <td>
+                                            <div class="vi-td-title">@(string.IsNullOrWhiteSpace(d.Action) ? "Decision" : d.Action)</div>
+                                            @if (!string.IsNullOrWhiteSpace(d.Rationale))
+                                            {
+                                                <div class="vi-td-note">@d.Rationale</div>
+                                            }
+                                        </td>
+                                        <td class="vi-td-mono">@(d.ContextId.Length > 0 ? d.ContextId : "—")</td>
+                                        <td class="vi-td-mono">@d.Driver</td>
+                                        <td class="vi-td-mono">@(d.Analyst.Length > 0 ? d.Analyst : "—")</td>
+                                        <td class="vi-td-mono vi-faint">@DecisionsService.Fmt(d.CreatedAt)</td>
+                                        <td>
+                                            <span class="vi-chip @(string.IsNullOrWhiteSpace(d.Outcome) ? "warn" : "ok")">
+                                                @(string.IsNullOrWhiteSpace(d.Outcome) ? "PENDING" : d.Outcome)
+                                            </span>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <!-- Right: record outcomes -->
+        <div class="vi-stack">
+            @if (Svc.DecisionRows().Any())
+            {
+                <div class="vi-panel soft">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Record Outcomes</span></div>
+                    <div class="vi-panel-body vi-stack">
+                        @foreach (var d in Svc.DecisionRows().Where(x => string.IsNullOrWhiteSpace(x.Outcome)).Take(5))
+                        {
+                            <div class="vi-stack" style="gap:4px;padding-bottom:10px;border-bottom:1px solid var(--bd);">
+                                <div class="vi-td-title vi-trunc">@(string.IsNullOrWhiteSpace(d.Action) ? "Decision" : d.Action)</div>
+                                <div class="vi-td-note">@DecisionsService.Fmt(d.CreatedAt)</div>
+                                <div class="vi-form-row">
+                                    <input class="vi-input sm" style="flex:1;" placeholder="Outcome result…"
+                                           value="@Svc.GetOutcome(d.Id)"
+                                           @oninput="e => Svc.SetOutcome(d.Id, e.Value?.ToString() ?? string.Empty)" />
+                                    <button class="vi-btn sm ok" @onclick="() => Svc.RecordOutcomeAsync(d.Id)">Save</button>
+                                </div>
+                            </div>
+                        }
+                        @if (!Svc.DecisionRows().Any(d => string.IsNullOrWhiteSpace(d.Outcome)))
+                        {
+                            <div class="vi-faint" style="font-size:12px;text-align:center;">All decisions have outcomes recorded.</div>
+                        }
+                    </div>
+                </div>
+            }
+
+            <div class="vi-panel soft">
+                <div class="vi-panel-hdr"><span class="vi-panel-title">Operator Note</span></div>
+                <div class="vi-panel-body">
+                    <div style="font-size:13px;color:var(--tm);line-height:1.6;">
+                        This ledger closes the loop between recommendation, analyst action, and recorded outcome
+                        so the system can learn from prior responses and maintain an immutable audit trail.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+}

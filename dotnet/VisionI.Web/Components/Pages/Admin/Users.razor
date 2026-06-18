@@ -1,0 +1,146 @@
+@page "/admin/users"
+@layout AdminLayout
+@inject AdminUsersService Svc
+@inject IJSRuntime JS
+@inject ToastService Toast
+@implements IDisposable
+
+<PageTitle>Users | Vision-I Admin</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Admin / Users</div>
+            <h1 class="vi-h1">User Management</h1>
+            <div class="vi-sub">ROLES · ACCESS CONTROL · ANALYST ACCOUNTS</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" disabled="@Svc.Loading" @onclick="Svc.LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    @if (Svc.Loading)
+    {
+        <div class="vi-loading">LOADING USERS</div>
+    }
+    else if (!Svc.Doc.HasValue)
+    {
+        <div class="vi-empty">No user data available</div>
+    }
+    else
+    {
+        var users = GetUsers();
+        <div class="vi-metrics">
+            <div class="vi-metric">
+                <div class="vi-metric-label">Total Users</div>
+                <div class="vi-metric-val accent">@users.Count</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Active</div>
+                <div class="vi-metric-val ok">@users.Count(u => GetBool(u, "is_active"))</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Admins</div>
+                <div class="vi-metric-val warn">@users.Count(u => GetStr(u, "role") == "admin")</div>
+            </div>
+        </div>
+
+        <div class="vi-panel" style="flex:1;min-height:0;">
+            <div class="vi-panel-hdr"><span class="vi-panel-title">Users</span></div>
+            <div class="vi-tbl-wrap">
+                <table class="vi-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Email</th>
+                            <th>Role</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var u in users)
+                        {
+                            var id = GetStr(u, "id");
+                            var role = GetStr(u, "role");
+                            var active = GetBool(u, "is_active");
+                            var name = GetStr(u, "display_name");
+                            <tr>
+                                <td><div class="vi-td-title">@GetStr(u, "display_name")</div></td>
+                                <td class="vi-td-mono">@GetStr(u, "email")</td>
+                                <td>
+                                    <select class="vi-select sm" value="@role"
+                                            @onchange="e => Svc.ChangeRoleAsync(id, e.Value?.ToString() ?? role)">
+                                        <option value="viewer">Viewer</option>
+                                        <option value="analyst">Analyst</option>
+                                        <option value="admin">Admin</option>
+                                    </select>
+                                </td>
+                                <td>
+                                    <span class="vi-chip @(active ? "ok" : "err")">@(active ? "ACTIVE" : "DISABLED")</span>
+                                </td>
+                                <td>
+                                    <div style="display:flex;gap:5px;">
+                                        <button class="vi-btn sm @(active ? "err" : "ok")"
+                                                @onclick="() => Svc.ToggleAsync(id, !active)">
+                                            @(active ? "Disable" : "Enable")
+                                        </button>
+                                        <button class="vi-btn sm"
+                                                @onclick="() => ResetPasswordAsync(id)">
+                                            Reset Pwd
+                                        </button>
+                                        <button class="vi-btn sm err"
+                                                @onclick="() => ConfirmDeleteAsync(id, name)">
+                                            Delete
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    async Task ResetPasswordAsync(string id)
+    {
+        if (!await JS.InvokeAsync<bool>("confirm", "Reset password for this user?")) return;
+        await Svc.ResetPasswordAsync(id);
+        Toast.ShowSuccess("Password reset link sent.");
+    }
+
+    async Task ConfirmDeleteAsync(string id, string name)
+    {
+        if (!await JS.InvokeAsync<bool>("confirm", $"Permanently delete user \"{name}\"? This cannot be undone.")) return;
+        await Svc.DeleteAsync(id);
+        Toast.ShowSuccess($"User {name} deleted.");
+    }
+
+    List<System.Text.Json.JsonElement> GetUsers()
+    {
+        if (!Svc.Doc.HasValue) return new();
+        var doc = Svc.Doc.Value;
+        if (doc.TryGetProperty("users", out var arr) && arr.ValueKind == System.Text.Json.JsonValueKind.Array)
+            return arr.EnumerateArray().ToList();
+        return new();
+    }
+
+    static string GetStr(System.Text.Json.JsonElement el, string prop)
+        => el.TryGetProperty(prop, out var v) ? v.GetString() ?? "—" : "—";
+
+    static bool GetBool(System.Text.Json.JsonElement el, string prop)
+        => el.TryGetProperty(prop, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.True;
+
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+}

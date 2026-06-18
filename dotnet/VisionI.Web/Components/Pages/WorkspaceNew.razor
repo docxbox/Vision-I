@@ -1,0 +1,539 @@
+@page "/workspaces/new"
+@layout AnalystLayout
+@inject WorkspaceService Workspace
+@inject NavigationManager Nav
+@inject ToastService Toast
+
+<PageTitle>Create Workspace | Vision-I</PageTitle>
+
+<div class="vi-page" style="max-width:700px;">
+
+    <div class="vi-page-hdr" style="margin-bottom:20px;">
+        <div>
+            <div class="vi-kicker">Mission / Workspaces</div>
+            <h1 class="vi-h1">Create Workspace</h1>
+            <div style="font-size:11px;color:var(--tm);margin-top:2px;">
+                Define a mission watch for events, actors, sentiment, assets, and relationships.
+            </div>
+        </div>
+        <button class="vi-btn" @onclick='() => Nav.NavigateTo("/workspaces")'>Cancel</button>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div style="color:var(--err);font-size:12px;margin-bottom:14px;padding:10px 14px;
+                    background:rgba(255,80,80,.08);border-radius:var(--r1);border-left:3px solid var(--err);">
+            @_error
+        </div>
+    }
+
+    <!-- ── 1. Basic Information ─────────────────────────────────────────── -->
+    <div class="vi-panel" style="padding:18px 20px;margin-bottom:12px;">
+        <div class="vi-kicker" style="margin-bottom:14px;">Basic Information</div>
+
+        <div style="margin-bottom:12px;">
+            <div style="font-size:11px;color:var(--tm);margin-bottom:4px;">Title *</div>
+            <input class="vi-input" style="width:100%;" placeholder="e.g. Iran / Strait of Hormuz"
+                   value="@_title"
+                   @oninput='e => { _title = e.Value?.ToString() ?? ""; if (!_slugEdited) _slug = ToSlug(_title); }' />
+        </div>
+
+        <div style="margin-bottom:12px;">
+            <div style="font-size:11px;color:var(--tm);margin-bottom:4px;">
+                Slug *
+                <span style="font-size:10px;color:var(--tf);"> — URL identifier, auto-generated from title</span>
+            </div>
+            <input class="vi-input" style="width:100%;" placeholder="e.g. iran-strait-of-hormuz"
+                   value="@_slug"
+                   @oninput='e => { _slug = e.Value?.ToString() ?? ""; _slugEdited = true; }' />
+        </div>
+
+        <div style="margin-bottom:12px;">
+            <div style="font-size:11px;color:var(--tm);margin-bottom:4px;">Description</div>
+            <textarea class="vi-input" style="width:100%;min-height:58px;resize:vertical;"
+                      placeholder="What is this workspace monitoring? Keep it one sentence."
+                      @bind="_description" @bind:event="oninput"></textarea>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+            <div>
+                <div style="font-size:11px;color:var(--tm);margin-bottom:4px;">Classification</div>
+                <select class="vi-select" style="width:100%;" @bind="_classification">
+                    <option value="UNCLASSIFIED">UNCLASSIFIED</option>
+                    <option value="INTERNAL">INTERNAL</option>
+                    <option value="CONFIDENTIAL">CONFIDENTIAL</option>
+                </select>
+            </div>
+            <div>
+                <div style="font-size:11px;color:var(--tm);margin-bottom:4px;">Default Time Window</div>
+                <select class="vi-select" style="width:100%;" @bind="_windowHours">
+                    <option value="6">6 hours</option>
+                    <option value="12">12 hours</option>
+                    <option value="24">24 hours</option>
+                    <option value="48">48 hours</option>
+                    <option value="72">72 hours</option>
+                </select>
+            </div>
+            <div>
+                <div style="font-size:11px;color:var(--tm);margin-bottom:4px;">Visibility</div>
+                <select class="vi-select" style="width:100%;" @bind="_visibility">
+                    <option value="private">Private (only me)</option>
+                    <option value="team">Team (all analysts)</option>
+                    <option value="public">Public (read by all)</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── 2. Area of Interest ──────────────────────────────────────────── -->
+    <div class="vi-panel" style="padding:18px 20px;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <div class="vi-kicker" style="margin:0;">Area of Interest</div>
+            <label style="display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;">
+                <input type="checkbox" @bind="_aoiEnabled" />
+                Enable geographic AOI
+            </label>
+        </div>
+
+        @if (!_aoiEnabled)
+        {
+            <div style="font-size:11px;color:var(--tf);">No AOI — workspace monitors globally scoped topics.</div>
+        }
+        else
+        {
+            <div style="margin-bottom:12px;">
+                <div style="font-size:11px;color:var(--tm);margin-bottom:4px;">Preset Region</div>
+                <select class="vi-select" style="width:100%;"
+                        @onchange='e => ApplyAoiPreset(e.Value?.ToString() ?? "")'>
+                    <option value="">— Select preset or enter manually —</option>
+                    <option value="strait-of-hormuz">Strait of Hormuz (24–28.5°N, 54–58.8°E)</option>
+                    <option value="persian-gulf">Persian Gulf (23.5–30°N, 48–57°E)</option>
+                    <option value="red-sea">Red Sea (12–30°N, 32–43.5°E)</option>
+                    <option value="taiwan-strait">Taiwan Strait (22–26°N, 118–122°E)</option>
+                    <option value="south-china-sea">South China Sea (0–25°N, 105–122°E)</option>
+                    <option value="black-sea">Black Sea (40.9–46.6°N, 27.4–41°E)</option>
+                    <option value="ukraine">Ukraine (44–52.5°N, 22–40°E)</option>
+                </select>
+            </div>
+
+            <div style="margin-bottom:12px;">
+                <div style="font-size:11px;color:var(--tm);margin-bottom:4px;">Region Name</div>
+                <input class="vi-input" style="width:100%;" placeholder="e.g. Strait of Hormuz"
+                       @bind="_aoiName" @bind:event="oninput" />
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:5px;">
+                <div>
+                    <div style="font-size:11px;color:var(--tm);margin-bottom:4px;">Min Latitude</div>
+                    <input class="vi-input" type="number" step="0.1" style="width:100%;" placeholder="e.g. 24.0"
+                           @bind="_minLatStr" @bind:event="oninput" />
+                </div>
+                <div>
+                    <div style="font-size:11px;color:var(--tm);margin-bottom:4px;">Max Latitude</div>
+                    <input class="vi-input" type="number" step="0.1" style="width:100%;" placeholder="e.g. 28.5"
+                           @bind="_maxLatStr" @bind:event="oninput" />
+                </div>
+                <div>
+                    <div style="font-size:11px;color:var(--tm);margin-bottom:4px;">Min Longitude</div>
+                    <input class="vi-input" type="number" step="0.1" style="width:100%;" placeholder="e.g. 54.0"
+                           @bind="_minLonStr" @bind:event="oninput" />
+                </div>
+                <div>
+                    <div style="font-size:11px;color:var(--tm);margin-bottom:4px;">Max Longitude</div>
+                    <input class="vi-input" type="number" step="0.1" style="width:100%;" placeholder="e.g. 58.8"
+                           @bind="_maxLonStr" @bind:event="oninput" />
+                </div>
+            </div>
+            <div style="font-size:10px;color:var(--tf);">Lat –90 to 90 · Lon –180 to 180 · Min must be less than Max</div>
+        }
+    </div>
+
+    <!-- ── 3. Tracked Topics ────────────────────────────────────────────── -->
+    <div class="vi-panel" style="padding:18px 20px;margin-bottom:12px;">
+        <div class="vi-panel-hdr" style="margin-bottom:4px;">
+            <span class="vi-kicker" style="margin:0;">Tracked Topics</span>
+            <span class="vi-chip">@_queries.Count(q => q.IsActive && !string.IsNullOrWhiteSpace(q.Text)) active</span>
+        </div>
+        <div style="font-size:11px;color:var(--tf);margin-bottom:12px;">
+            Keywords that drive news, social, and web retrieval. At least one active topic required.
+        </div>
+
+        @foreach (var qrow in _queries)
+        {
+            var row = qrow;
+            <div style="display:grid;grid-template-columns:1fr 70px auto auto;gap:6px;align-items:center;margin-bottom:6px;">
+                <input class="vi-input sm" placeholder="e.g. Iran, IRGC, Strait of Hormuz…"
+                       value="@row.Text"
+                       @oninput='e => row.Text = e.Value?.ToString() ?? ""' />
+                <input class="vi-input sm" type="number" min="1" max="999" placeholder="Pri"
+                       title="Priority (lower = higher priority)"
+                       value="@row.Priority"
+                       @oninput='e => { if (int.TryParse(e.Value?.ToString(), out var p)) row.Priority = p; }' />
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;white-space:nowrap;">
+                    <input type="checkbox" checked="@row.IsActive"
+                           @onchange='e => row.IsActive = (bool)(e.Value ?? true)' />
+                    Active
+                </label>
+                <button class="vi-btn sm" title="Remove" @onclick='() => _queries.Remove(row)'>×</button>
+            </div>
+        }
+        <button class="vi-btn sm" style="margin-top:4px;"
+                @onclick='() => _queries.Add(new QueryRow { Priority = _queries.Count + 1 })'>
+            + Add Topic
+        </button>
+    </div>
+
+    <!-- ── 4. Key Actors ────────────────────────────────────────────────── -->
+    <div class="vi-panel" style="padding:18px 20px;margin-bottom:12px;">
+        <div class="vi-panel-hdr" style="margin-bottom:4px;">
+            <span class="vi-kicker" style="margin:0;">Key Actors</span>
+            <span class="vi-chip">@_entities.Count(e => !string.IsNullOrWhiteSpace(e.Name))</span>
+        </div>
+        <div style="font-size:11px;color:var(--tf);margin-bottom:12px;">
+            Pinned entities for relationship and activity tracking. Optional but recommended.
+        </div>
+
+        @foreach (var erow in _entities)
+        {
+            var row = erow;
+            <div style="display:grid;grid-template-columns:1fr 130px auto auto;gap:6px;align-items:center;margin-bottom:6px;">
+                <input class="vi-input sm" placeholder="Actor / location name"
+                       value="@row.Name"
+                       @oninput='e => row.Name = e.Value?.ToString() ?? ""' />
+                <select class="vi-select sm" @bind="row.EntityType">
+                    <option value="">— type —</option>
+                    <option value="country">Country</option>
+                    <option value="organization">Organization</option>
+                    <option value="military">Military</option>
+                    <option value="person">Person</option>
+                    <option value="location">Location</option>
+                    <option value="company">Company</option>
+                    <option value="unknown">Unknown</option>
+                </select>
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;white-space:nowrap;">
+                    <input type="checkbox" checked="@row.IsPrimary"
+                           @onchange='e => row.IsPrimary = (bool)(e.Value ?? false)' />
+                    Primary
+                </label>
+                <button class="vi-btn sm" title="Remove" @onclick='() => _entities.Remove(row)'>×</button>
+            </div>
+        }
+        <button class="vi-btn sm" style="margin-top:4px;"
+                @onclick='() => _entities.Add(new EntityRow())'>
+            + Add Actor
+        </button>
+    </div>
+
+    <!-- ── 5. Sources ────────────────────────────────────────────────────── -->
+    <div class="vi-panel" style="padding:18px 20px;margin-bottom:12px;">
+        <div class="vi-panel-hdr" style="margin-bottom:8px;">
+            <span class="vi-kicker" style="margin:0;">Data Sources</span>
+            <span class="vi-chip">@_sources.Count(kv => kv.Value) enabled</span>
+        </div>
+
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">
+            <span style="font-size:11px;color:var(--tf);align-self:center;">Quick presets:</span>
+            <button class="vi-btn sm" @onclick='() => ApplySourcePreset("narrative")'>Narrative Watch</button>
+            <button class="vi-btn sm" @onclick='() => ApplySourcePreset("maritime")'>Maritime Watch</button>
+            <button class="vi-btn sm" @onclick='() => ApplySourcePreset("full")'>Full Intelligence</button>
+        </div>
+
+        @foreach (var grp in AllSources.GroupBy(s => s.Group))
+        {
+            <div class="vi-kicker" style="margin:10px 0 6px;">@grp.Key</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:5px 12px;margin-bottom:4px;">
+                @foreach (var src in grp)
+                {
+                    var sn = src.Name;
+                    <label style="display:flex;align-items:flex-start;gap:7px;font-size:12px;cursor:pointer;padding:5px 6px;border-radius:4px;background:var(--s1);">
+                        <input type="checkbox" style="margin-top:2px;"
+                               checked="@_sources.GetValueOrDefault(sn)"
+                               @onchange='e => _sources[sn] = (bool)(e.Value ?? false)' />
+                        <div>
+                            <div style="font-weight:500;">@src.Label</div>
+                            <div style="font-size:10px;color:var(--tf);">@src.Description</div>
+                        </div>
+                    </label>
+                }
+            </div>
+        }
+    </div>
+
+    <!-- ── 6. Review Summary ────────────────────────────────────────────── -->
+    <div class="vi-panel" style="padding:16px 20px;margin-bottom:20px;border:1px solid var(--acc);">
+        <div class="vi-kicker" style="margin-bottom:10px;">Review Summary</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:12px;">
+            <div style="display:flex;gap:6px;">
+                <span style="color:var(--tm);min-width:80px;">Workspace</span>
+                <strong>@(string.IsNullOrWhiteSpace(_title) ? "—" : _title)</strong>
+            </div>
+            <div style="display:flex;gap:6px;">
+                <span style="color:var(--tm);min-width:80px;">Slug</span>
+                <span style="color:var(--tf);">@(string.IsNullOrWhiteSpace(_slug) ? "—" : _slug)</span>
+            </div>
+            <div style="display:flex;gap:6px;">
+                <span style="color:var(--tm);min-width:80px;">Window</span>
+                <span>@_windowHours h</span>
+            </div>
+            <div style="display:flex;gap:6px;">
+                <span style="color:var(--tm);min-width:80px;">Classification</span>
+                <span class="vi-chip info" style="font-size:10px;">@_classification</span>
+            </div>
+            <div style="display:flex;gap:6px;">
+                <span style="color:var(--tm);min-width:80px;">AOI</span>
+                <span>@(_aoiEnabled ? (string.IsNullOrWhiteSpace(_aoiName) ? "Custom bbox" : _aoiName) : "None")</span>
+            </div>
+            <div style="display:flex;gap:6px;">
+                <span style="color:var(--tm);min-width:80px;">Topics</span>
+                <span>@_queries.Count(q => q.IsActive && !string.IsNullOrWhiteSpace(q.Text)) active</span>
+            </div>
+            <div style="display:flex;gap:6px;">
+                <span style="color:var(--tm);min-width:80px;">Actors</span>
+                <span>@_entities.Count(e => !string.IsNullOrWhiteSpace(e.Name))</span>
+            </div>
+            <div style="display:flex;gap:6px;grid-column:span 2;">
+                <span style="color:var(--tm);min-width:80px;">Sources</span>
+                <div style="display:flex;flex-wrap:wrap;gap:4px;">
+                    @foreach (var kv in _sources.Where(kv => kv.Value))
+                    {
+                        <span class="vi-chip ok" style="font-size:10px;">@kv.Key.ToUpperInvariant()</span>
+                    }
+                    @if (!_sources.Any(kv => kv.Value))
+                    {
+                        <span style="color:var(--err);">None enabled</span>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Actions ──────────────────────────────────────────────────────── -->
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:32px;">
+        <button class="vi-btn" @onclick='() => Nav.NavigateTo("/workspaces")'>Cancel</button>
+        <button class="vi-btn primary" disabled="@_creating" @onclick="CreateAsync">
+            @(_creating ? "Creating workspace…" : "Create Workspace")
+        </button>
+    </div>
+
+</div>
+
+@code {
+    string _title          = "";
+    string _slug           = "";
+    string _description    = "";
+    string _classification = "UNCLASSIFIED";
+    string _visibility     = "private";
+    int    _windowHours    = 24;
+    bool   _slugEdited;
+    string _error          = "";
+    bool   _creating;
+
+    bool   _aoiEnabled;
+    string _aoiName   = "";
+    string _minLatStr = "", _maxLatStr = "", _minLonStr = "", _maxLonStr = "";
+
+    List<QueryRow>  _queries  = [new QueryRow { Text = "", Priority = 1 }];
+    List<EntityRow> _entities = [];
+
+    Dictionary<string, bool> _sources = new()
+    {
+        ["news"] = true, ["gdelt"] = true, ["rss"] = true,
+        ["reddit"] = true, ["youtube"] = true, ["telegram"] = false,
+        ["opensky"] = true, ["ais"] = true,
+        ["hackernews"] = false, ["stocks"] = false, ["crypto"] = false,
+        ["weather"] = false, ["who"] = false,
+    };
+
+    static readonly (string Name, string Label, string Description, string Group)[] AllSources =
+    [
+        ("news",      "News",       "Article aggregation",            "Text / Media"),
+        ("gdelt",     "GDELT",      "Global event database",          "Text / Media"),
+        ("rss",       "RSS",        "Custom RSS feeds",               "Text / Media"),
+        ("reddit",    "Reddit",     "Community discussion",           "Social"),
+        ("youtube",   "YouTube",    "Video commentary tracking",      "Social"),
+        ("telegram",  "Telegram",   "Messenger channel monitoring",   "Social"),
+        ("opensky",   "OpenSky",    "Aircraft / airspace tracking",   "Physical / Geospatial"),
+        ("ais",       "AIS",        "Vessel / maritime tracking",     "Physical / Geospatial"),
+        ("hackernews","HackerNews", "Tech community signals",         "Optional"),
+        ("stocks",    "Stocks",     "Market / equity signals",        "Optional"),
+        ("crypto",    "Crypto",     "Cryptocurrency signals",         "Optional"),
+        ("weather",   "Weather",    "Weather / climate events",       "Optional"),
+        ("who",       "WHO",        "Health / epidemic alerts",       "Optional"),
+    ];
+
+    static readonly Dictionary<string, (double MinLat, double MaxLat, double MinLon, double MaxLon, string Name)> AoiPresets = new()
+    {
+        ["strait-of-hormuz"] = (24.0, 28.5, 54.0, 58.8, "Strait of Hormuz"),
+        ["persian-gulf"]     = (23.5, 30.0, 48.0, 57.0, "Persian Gulf"),
+        ["red-sea"]          = (12.0, 30.0, 32.0, 43.5, "Red Sea"),
+        ["taiwan-strait"]    = (22.0, 26.0, 118.0, 122.0, "Taiwan Strait"),
+        ["south-china-sea"]  = (0.0,  25.0, 105.0, 122.0, "South China Sea"),
+        ["black-sea"]        = (40.9, 46.6, 27.4,  41.0,  "Black Sea"),
+        ["ukraine"]          = (44.0, 52.5, 22.0,  40.0,  "Ukraine"),
+    };
+
+    static string ToSlug(string title) =>
+        System.Text.RegularExpressions.Regex.Replace(
+            title.ToLowerInvariant().Trim().Replace('/', '-').Replace(' ', '-'),
+            @"[^a-z0-9\-]", "")
+        .Trim('-');
+
+    static double? ParseDouble(string s) =>
+        double.TryParse(s, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
+
+    void ApplyAoiPreset(string key)
+    {
+        if (string.IsNullOrEmpty(key) || !AoiPresets.TryGetValue(key, out var p)) return;
+        _aoiName   = p.Name;
+        _minLatStr = p.MinLat.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _maxLatStr = p.MaxLat.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _minLonStr = p.MinLon.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _maxLonStr = p.MaxLon.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    void ApplySourcePreset(string preset)
+    {
+        foreach (var key in _sources.Keys.ToList()) _sources[key] = false;
+        switch (preset)
+        {
+            case "narrative":
+                foreach (var s in new[]{ "news","gdelt","rss","reddit","youtube" }) _sources[s] = true;
+                break;
+            case "maritime":
+                foreach (var s in new[]{ "news","gdelt","ais","opensky" }) _sources[s] = true;
+                break;
+            case "full":
+                foreach (var key in _sources.Keys.ToList()) _sources[key] = true;
+                break;
+        }
+    }
+
+    async Task CreateAsync()
+    {
+        _error = "";
+        if (!Validate()) return;
+        _creating = true;
+        StateHasChanged();
+        try
+        {
+            var (result, apiError) = await Workspace.CreateWorkspaceWithErrorAsync(BuildRequest());
+            if (result is null)
+            {
+                _error = apiError ?? "Failed to create workspace. Check the slug is unique and all required fields are set.";
+                return;
+            }
+            _ = Workspace.RefreshWorkspaceAsync(result.Slug);
+            Toast.ShowSuccess("Workspace created and initial snapshot requested.");
+            Nav.NavigateTo($"/workspaces/{result.Slug}");
+        }
+        catch (Exception ex)
+        {
+            _error = $"Creation failed: {ex.Message}";
+        }
+        finally { _creating = false; }
+    }
+
+    bool Validate()
+    {
+        if (string.IsNullOrWhiteSpace(_title))
+        {
+            _error = "Workspace title is required.";
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(_slug))
+        {
+            _error = "Slug is required.";
+            return false;
+        }
+        if (!System.Text.RegularExpressions.Regex.IsMatch(_slug.Trim(), @"^[a-z0-9\-]+$"))
+        {
+            _error = "Slug must contain only lowercase letters, numbers, and hyphens (e.g. iran-strait-of-hormuz).";
+            return false;
+        }
+        if (_aoiEnabled)
+        {
+            var mnLat = ParseDouble(_minLatStr);
+            var mxLat = ParseDouble(_maxLatStr);
+            var mnLon = ParseDouble(_minLonStr);
+            var mxLon = ParseDouble(_maxLonStr);
+            if (mnLat is null || mxLat is null || mnLon is null || mxLon is null)
+            {
+                _error = "All four AOI coordinates are required when AOI is enabled.";
+                return false;
+            }
+            if (mnLat >= mxLat) { _error = "AOI: Min Latitude must be less than Max Latitude."; return false; }
+            if (mnLon >= mxLon) { _error = "AOI: Min Longitude must be less than Max Longitude."; return false; }
+            if (mnLat < -90 || mxLat > 90) { _error = "AOI: Latitude must be between –90 and 90."; return false; }
+            if (mnLon < -180 || mxLon > 180) { _error = "AOI: Longitude must be between –180 and 180."; return false; }
+        }
+        if (!_queries.Any(q => q.IsActive && !string.IsNullOrWhiteSpace(q.Text)))
+        {
+            _error = "At least one active tracked topic is required.";
+            return false;
+        }
+        var dupQuery = _queries
+            .Where(q => !string.IsNullOrWhiteSpace(q.Text))
+            .GroupBy(q => q.Text.Trim(), StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(g => g.Count() > 1);
+        if (dupQuery is not null)
+        {
+            _error = $"Duplicate topic: \"{dupQuery.Key}\". Remove the duplicate.";
+            return false;
+        }
+        var dupEntity = _entities
+            .Where(e => !string.IsNullOrWhiteSpace(e.Name))
+            .GroupBy(e => e.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(g => g.Count() > 1);
+        if (dupEntity is not null)
+        {
+            _error = $"Duplicate entity: \"{dupEntity.Key}\". Remove the duplicate.";
+            return false;
+        }
+        var primaryCount = _entities.Count(e => e.IsPrimary && !string.IsNullOrWhiteSpace(e.Name));
+        if (primaryCount > 3)
+        {
+            _error = $"Too many primary entities ({primaryCount}). Limit to 3 or fewer — primary entities drive workspace focus and over-broadening reduces signal quality.";
+            return false;
+        }
+        if (!_sources.Any(kv => kv.Value))
+        {
+            _error = "At least one data source must be enabled.";
+            return false;
+        }
+        return true;
+    }
+
+    CreateWorkspaceRequest BuildRequest() => new(
+        Slug:               _slug.Trim(),
+        Title:              _title.Trim(),
+        Description:        string.IsNullOrWhiteSpace(_description) ? null : _description.Trim(),
+        Classification:     _classification,
+        DefaultWindowHours: _windowHours,
+        Visibility:         _visibility,
+        GeoFilters: _aoiEnabled
+            ? [new GeoFilterRequest("bbox",
+                string.IsNullOrWhiteSpace(_aoiName) ? "AOI" : _aoiName.Trim(),
+                ParseDouble(_minLatStr), ParseDouble(_maxLatStr),
+                ParseDouble(_minLonStr), ParseDouble(_maxLonStr))]
+            : null,
+        Queries: _queries
+            .Where(q => !string.IsNullOrWhiteSpace(q.Text))
+            .Select(q => new QueryRequest(q.Text.Trim(), q.Priority, q.IsActive))
+            .ToList(),
+        Entities: _entities
+            .Where(e => !string.IsNullOrWhiteSpace(e.Name))
+            .Select(e => new EntityRequest(
+                e.Name.Trim().ToLowerInvariant().Replace(" ", "-"),
+                e.Name.Trim(),
+                string.IsNullOrWhiteSpace(e.EntityType) ? null : e.EntityType,
+                e.IsPrimary))
+            .ToList(),
+        SourceProfiles: _sources
+            .Select(kv => new SourceProfileRequest(kv.Key, kv.Value))
+            .ToList()
+    );
+
+    class QueryRow  { public string Text = ""; public bool IsActive = true; public int Priority = 1; }
+    class EntityRow { public string Name = ""; public string EntityType = ""; public bool IsPrimary; }
+}

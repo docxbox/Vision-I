@@ -1,0 +1,203 @@
+@inject NavigationManager Nav
+@inject WorkspaceService WorkspaceSvc
+@inject ToastService Toast
+
+@if (Developments is null)
+{
+    <EmptyState Message="No developments data." />
+}
+else
+{
+    var filtered  = FilterDevelopments();
+    var devGroups = GroupByType(filtered);
+    var sourceMix = Developments.Events
+        .Where(e => !string.IsNullOrWhiteSpace(e.Source))
+        .GroupBy(e => e.Source!)
+        .Select(g => new { Source = g.Key, Family = SourceFamily(g.Key), Count = g.Count() })
+        .OrderByDescending(x => x.Count)
+        .ThenBy(x => x.Source)
+        .ToList();
+
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;padding:10px 12px;background:var(--s2);border-radius:var(--r1);">
+        <span class="vi-kicker" style="margin:0;">Filter</span>
+        <select class="vi-select sm" @bind="_devFilterRisk" style="min-width:110px;">
+            <option value="">All risk</option>
+            <option value="high">High (≥0.7)</option>
+            <option value="medium">Medium (≥0.4)</option>
+            <option value="low">Low</option>
+        </select>
+        <select class="vi-select sm" @bind="_devFilterSource" style="min-width:120px;">
+            <option value="">All sources</option>
+            @foreach (var src in Developments.Events.Select(e => e.Source).Distinct().OrderBy(s => s))
+            {
+                <option value="@src">@src</option>
+            }
+        </select>
+        <select class="vi-select sm" @bind="_devFilterType" style="min-width:130px;">
+            <option value="">All types</option>
+            @foreach (var t in Developments.Events.Where(e => !string.IsNullOrWhiteSpace(e.EventType)).Select(e => e.EventType!).Distinct().OrderBy(s => s))
+            {
+                <option value="@t">@t</option>
+            }
+        </select>
+        <span style="font-size:11px;color:var(--tf);margin-left:auto;">@filtered.Count of @Developments.Events.Count</span>
+        @if (Developments.FromCache) { <span class="vi-chip">CACHED</span> }
+    </div>
+    @if (sourceMix.Count > 0)
+    {
+        <div class="vi-panel" style="padding:10px 12px;margin-bottom:14px;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <span class="vi-kicker" style="margin:0;">Evidence Mix</span>
+                <button class="vi-chip @SourceChipClass("")" @onclick='() => SetSourceFilter("")'>ALL SOURCES</button>
+                @foreach (var src in sourceMix.Take(18))
+                {
+                    <button class="vi-chip @SourceChipClass(src.Source)"
+                            title="@($"{src.Family} · {src.Count} matched developments")"
+                            @onclick="() => SetSourceFilter(src.Source)">
+                        @src.Source.ToUpperInvariant()
+                        <span style="opacity:.65;">@src.Count</span>
+                    </button>
+                }
+            </div>
+        </div>
+    }
+
+    @if (!filtered.Any())
+    {
+        <EmptyState Icon="search_off" Message="No developments match the current filters." />
+    }
+    else
+    {
+        @foreach (var (grpKey, grpItems) in devGroups)
+        {
+            <div style="margin-bottom:20px;">
+                <div class="vi-kicker" style="margin-bottom:8px;">@grpKey (@grpItems.Count)</div>
+                <div class="vi-stack" style="gap:8px;">
+                    @foreach (var ev in grpItems)
+                    {
+                        var rCls = ev.RiskScore >= 0.7 ? "err" : ev.RiskScore >= 0.4 ? "warn" : "";
+                        var ts   = ev.Timestamp is { Length: > 10 } ? ev.Timestamp[..16].Replace("T", " ") : (ev.Timestamp ?? "");
+                        <div class="vi-panel" style="padding:12px;">
+                            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px;cursor:pointer;"
+                                 @onclick='() => Nav.NavigateTo($"/events/{Uri.EscapeDataString(ev.EventId)}?from={Uri.EscapeDataString(Slug)}")'>
+                                <div style="font-size:13px;font-weight:500;flex:1;line-height:1.35;">@ev.Title</div>
+                                @if (ev.RiskScore.HasValue) { <span class="vi-chip @rCls" style="flex-shrink:0;">RISK @ev.RiskScore.Value.ToString("F2")</span> }
+                            </div>
+                            <div class="vi-kicker" style="margin-bottom:6px;">
+                                @ev.Source
+                                @if (!string.IsNullOrWhiteSpace(ts))        { <span> · @ts</span> }
+                                @if (!string.IsNullOrWhiteSpace(ev.Region)) { <span> · @ev.Region</span> }
+                            </div>
+                            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                                @if (!string.IsNullOrWhiteSpace(ev.EventType)) { <span class="vi-chip">@ev.EventType</span> }
+                                <a class="vi-chip info" href="/events/@Uri.EscapeDataString(ev.EventId)?from=@Uri.EscapeDataString(Slug)">Investigate →</a>
+                                <a class="vi-chip" href="/explore/event/@Uri.EscapeDataString(ev.EventId)" title="Open in object graph explorer">Graph →</a>
+                                @if (!string.IsNullOrWhiteSpace(ev.Region))
+                                {
+                                    <button class="vi-btn sm" style="font-size:10px;padding:1px 6px;"
+                                            @onclick='() => OnNavigateTab.InvokeAsync("Map")'>
+                                        <span class="material-symbols-outlined" style="font-size:12px;vertical-align:middle;">map</span>
+                                        Map
+                                    </button>
+                                }
+                                <button class="vi-btn sm" style="font-size:10px;padding:1px 6px;"
+                                        @onclick='() => OnNavigateTab.InvokeAsync("Entities")'>
+                                    <span class="material-symbols-outlined" style="font-size:12px;vertical-align:middle;">group</span>
+                                    Entities
+                                </button>
+                                <button class="vi-btn sm @(_pinned.Contains(ev.EventId) ? "active" : "")"
+                                        style="font-size:10px;padding:1px 6px;" title="Pin to evidence board"
+                                        disabled="@(_pinBusy.Contains(ev.EventId) || _pinned.Contains(ev.EventId))"
+                                        @onclick="() => PinEventAsync(ev)">
+                                    <span class="material-symbols-outlined" style="font-size:12px;vertical-align:middle;">push_pin</span>
+                                    @(_pinned.Contains(ev.EventId) ? "Pinned" : "Pin")
+                                </button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    }
+}
+
+@code {
+    [Parameter] public WorkspaceDevelopments? Developments  { get; set; }
+    [Parameter] public string                 Slug          { get; set; } = "";
+    [Parameter] public EventCallback<string>  OnNavigateTab { get; set; }
+
+    string _devFilterRisk   = "";
+    string _devFilterSource = "";
+    string _devFilterType   = "";
+
+    readonly HashSet<string> _pinBusy = new();
+    readonly HashSet<string> _pinned  = new();
+
+    void SetSourceFilter(string source) => _devFilterSource = source;
+
+    async Task PinEventAsync(WorkspaceEventItem ev)
+    {
+        if (string.IsNullOrWhiteSpace(ev.EventId) || _pinned.Contains(ev.EventId)) return;
+        _pinBusy.Add(ev.EventId);
+        try
+        {
+            var (result, error) = await WorkspaceSvc.PinEvidenceAsync(Slug, new PinEvidenceRequest(
+                ItemType: "event", ItemId: ev.EventId, Title: ev.Title, Source: ev.Source));
+            if (error is not null) { Toast.ShowError(error); return; }
+            _pinned.Add(ev.EventId);
+            Toast.ShowSuccess(result?.AlreadyPinned == true ? "Already on evidence board" : "Pinned to evidence board");
+        }
+        finally { _pinBusy.Remove(ev.EventId); }
+    }
+
+    List<WorkspaceEventItem> FilterDevelopments()
+    {
+        if (Developments is null) return [];
+        var items = Developments.Events.AsEnumerable();
+        if (!string.IsNullOrEmpty(_devFilterRisk))
+            items = _devFilterRisk switch
+            {
+                "high"   => items.Where(e => e.RiskScore >= 0.7),
+                "medium" => items.Where(e => e.RiskScore >= 0.4 && e.RiskScore < 0.7),
+                "low"    => items.Where(e => (e.RiskScore ?? 0) < 0.4),
+                _ => items
+            };
+        if (!string.IsNullOrEmpty(_devFilterSource)) items = items.Where(e => e.Source == _devFilterSource);
+        if (!string.IsNullOrEmpty(_devFilterType))   items = items.Where(e => e.EventType == _devFilterType);
+        return items.ToList();
+    }
+
+    static List<(string Key, List<WorkspaceEventItem> Value)> GroupByType(List<WorkspaceEventItem> items)
+    {
+        var order  = new[] { "maritime", "military", "diplomatic", "narrative", "economic", "other" };
+        var groups = new Dictionary<string, List<WorkspaceEventItem>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var ev in items)
+        {
+            var t   = ev.EventType?.ToLowerInvariant() ?? "other";
+            var key = order.FirstOrDefault(o => t.Contains(o)) ?? "other";
+            key     = char.ToUpperInvariant(key[0]) + key[1..];
+            if (!groups.TryGetValue(key, out var list)) { list = []; groups[key] = list; }
+            list.Add(ev);
+        }
+        return order.Select(o => char.ToUpperInvariant(o[0]) + o[1..])
+                    .Where(groups.ContainsKey)
+                    .Select(k => (k, groups[k]))
+                    .ToList();
+    }
+
+    string SourceChipClass(string source)
+        => string.Equals(_devFilterSource, source, StringComparison.OrdinalIgnoreCase) ? "info" : "";
+
+    static string SourceFamily(string source)
+    {
+        var s = source.ToLowerInvariant();
+        if (s.StartsWith("rss")) return "RSS";
+        if (s.StartsWith("gdelt")) return "GDELT";
+        if (s.Contains("newsapi")) return "NewsAPI";
+        if (s is "reddit" or "youtube" or "telegram" or "twitter" or "bluesky") return "Social";
+        if (s is "ais" or "opensky") return "Transport";
+        if (s is "usgs" or "weather" or "firms") return "Geo";
+        if (s.Contains("finance") || s.Contains("treasury")) return "Market";
+        return "Source";
+    }
+}

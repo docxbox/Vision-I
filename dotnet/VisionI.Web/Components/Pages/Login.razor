@@ -1,0 +1,102 @@
+@page "/login"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@layout EmptyLayout
+@using VisionI.Web.Models
+@using VisionI.Web.Services
+@inject AuthService AuthService
+@inject NavigationManager Navigation
+
+<PageTitle>Sign In | Vision-I</PageTitle>
+
+<div class="vi-auth-wall">
+    <div class="vi-auth-mark">VI</div>
+
+    <div class="vi-auth-card">
+        <div>
+            <div class="vi-kicker" style="text-align:center;margin-bottom:6px;">Operator Session</div>
+            <div class="vi-auth-title">Sign in to Vision-I</div>
+            <div class="vi-auth-sub">Restore the analyst workspace and reopen the operational picture.</div>
+        </div>
+
+        <div class="vi-field">
+            <label class="vi-label" for="login-email">Email</label>
+            <input id="login-email" type="email" class="vi-input"
+                   placeholder="analyst@vision-i.org"
+                   @bind="email" @bind:event="oninput"
+                   autocomplete="username" />
+        </div>
+
+        <div class="vi-field">
+            <label class="vi-label" for="login-password">Password</label>
+            <input id="login-password" type="password" class="vi-input"
+                   placeholder="Enter your access code"
+                   @bind="password" @bind:event="oninput"
+                   @onkeydown="HandleKey"
+                   autocomplete="current-password" />
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(error))
+        {
+            <div class="vi-auth-err">@error</div>
+        }
+
+        <div class="vi-stack" style="gap:6px;">
+            <button class="vi-btn primary lg" style="width:100%;justify-content:center;"
+                    @onclick="DoLogin" disabled="@loading">
+                @(loading ? "AUTHENTICATING..." : "SIGN IN")
+            </button>
+            <a class="vi-btn lg" style="width:100%;justify-content:center;text-align:center;"
+               href="/register">REQUEST ACCESS</a>
+        </div>
+
+        <div class="vi-auth-foot">SECURE OPERATOR WORKSPACE · SESSION-GATED</div>
+    </div>
+</div>
+
+@code {
+    private string email = "";
+    private string password = "";
+    private string error = "";
+    private bool loading;
+
+    protected override void OnInitialized()
+    {
+        if (AuthService.IsAuthenticated)
+            Navigation.NavigateTo("/dashboard");
+    }
+
+    private void HandleKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            _ = DoLogin();
+    }
+
+    private async Task DoLogin()
+    {
+        error = "";
+        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+        {
+            error = "Email and password are required.";
+            return;
+        }
+
+        loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await AuthService.LoginAsync(new LoginDto { Email = email.Trim(), Password = password });
+            if (!result.Ok)
+                error = result.Error ?? "Login failed.";
+            else
+                Navigation.NavigateTo("/dashboard", forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            error = "Connection error: " + ex.Message[..Math.Min(72, ex.Message.Length)];
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+}

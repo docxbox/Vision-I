@@ -1,0 +1,18 @@
+﻿@* Reusable shimmer skeleton loader. Pass Rows and Height to customize. *@
+
+<div class="skeleton-group" style="display:flex;flex-direction:column;gap:@(Gap)px">
+    @for (int i = 0; i < Rows; i++)
+    {
+        <div class="skeleton-bar"
+             style="height:@(Height)px;width:@(i == Rows - 1 && LastRowNarrower ? "65%" : "100%")">
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public int Rows { get; set; } = 3;
+    [Parameter] public int Height { get; set; } = 20;
+    [Parameter] public int Gap { get; set; } = 10;
+    [Parameter] public bool LastRowNarrower { get; set; } = true;
+}
+

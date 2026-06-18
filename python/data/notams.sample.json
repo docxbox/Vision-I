@@ -1,0 +1,25 @@
+{
+  "notams": [
+    {
+      "id": "sample-notam-001",
+      "title": "TEMPORARY RESTRICTED AIRSPACE (SAMPLE)",
+      "text": "Sample NOTAM closure for development/testing. Replace via NOTAM_API_URL or NOTAM_FEED_PATH.",
+      "status": "active",
+      "start": "2026-04-14T00:00:00Z",
+      "end": "2026-04-21T00:00:00Z",
+      "area": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [36.0, 33.0],
+            [37.0, 33.0],
+            [37.0, 34.0],
+            [36.0, 34.0],
+            [36.0, 33.0]
+          ]
+        ]
+      }
+    }
+  ]
+}
+

@@ -1,0 +1,357 @@
+@page "/explore/{Type}/{Id}"
+@layout AnalystLayout
+@inject ApiService Api
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+@using System.Text.Json
+
+<PageTitle>Explore | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Explore / @Type.ToUpperInvariant()</div>
+            <h1 class="vi-h1">@(_title ?? Decode(Id))</h1>
+            <div class="vi-sub">OBJECT GRAPH · DRILL ANY LINKED OBJECT</div>
+        </div>
+        <div class="vi-page-actions">
+            <span class="vi-chip @TypeCls(Type)">@Type.ToUpperInvariant()</span>
+            @if (_neighborTotal > 0) { <span class="vi-chip info">@_neighborTotal links</span> }
+            <button class="vi-btn sm @(_view == "list" ? "active" : "")" @onclick='() => SetView("list")'>List</button>
+            <button class="vi-btn sm @(_view == "graph" ? "active" : "")" @onclick='() => SetView("graph")'>Graph</button>
+            <button class="vi-btn" disabled="@_loading" @onclick="LoadAsync">Reload</button>
+        </div>
+    </div>
+
+    @if (_loading)
+    {
+        <LoadingState Message="LOADING OBJECT" />
+    }
+    else if (_view == "graph")
+    {
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;font:600 11px/1 var(--mono);color:var(--tm);">
+            <span class="material-symbols-outlined" style="font-size:14px;">touch_app</span>
+            Double-click a node to expand its links · single-click to focus
+        </div>
+        <div id="explore-graph" style="height:calc(100vh - 230px);min-height:460px;border:1px solid var(--bd);border-radius:var(--r1);background:var(--bg);"></div>
+    }
+    else
+    {
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px;align-items:start;">
+            <div class="vi-stack" style="min-width:0;gap:14px;">
+                @if (!string.IsNullOrWhiteSpace(_summary))
+                {
+                    <div class="vi-panel"><div class="vi-panel-body">@_summary</div></div>
+                }
+
+                @if (_byType.Count == 0)
+                {
+                    <EmptyState Icon="hub" Message="No linked objects in the knowledge graph for this node." />
+                }
+                else
+                {
+                    @foreach (var grp in _byType.OrderByDescending(g => g.Value.Count))
+                    {
+                        <section class="vi-panel">
+                            <div class="vi-panel-hdr">
+                                <span class="vi-panel-title">@GroupLabel(grp.Key) (@grp.Value.Count)</span>
+                            </div>
+                            <div class="vi-panel-body">
+                                <div class="vi-stack" style="gap:4px;">
+                                    @foreach (var n in grp.Value.Take(40))
+                                    {
+                                        <div class="vi-kv" style="cursor:pointer;" @onclick="() => Go(n)">
+                                            <span class="vi-kv-key vi-trunc">
+                                                <span class="vi-chip" style="font-size:9px;margin-right:6px;">@n.Rel</span>
+                                                @n.Label
+                                            </span>
+                                            <span class="material-symbols-outlined" style="font-size:15px;color:var(--tf);">chevron_right</span>
+                                        </div>
+                                    }
+                                    @if (grp.Value.Count > 40)
+                                    {
+                                        <div style="font-size:11px;color:var(--tf);padding:4px;">+@(grp.Value.Count - 40) more</div>
+                                    }
+                                </div>
+                            </div>
+                        </section>
+                    }
+                }
+            </div>
+
+            <aside class="vi-stack" style="min-width:0;gap:14px;">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Properties</span></div>
+                    <div class="vi-panel-body vi-stack" style="gap:4px;">
+                        @if (_props.Count == 0) { <div style="font-size:12px;color:var(--tf);">No properties.</div> }
+                        @foreach (var p in _props)
+                        {
+                            <div class="vi-kv"><span class="vi-kv-key">@p.Key</span><span class="vi-kv-val vi-trunc">@p.Value</span></div>
+                        }
+                        @if (_lat is not null && _lon is not null)
+                        {
+                            <a class="vi-btn sm" style="margin-top:8px;text-decoration:none;" href="/map?region=@Uri.EscapeDataString(_title ?? "")">
+                                <span class="material-symbols-outlined" style="font-size:13px;vertical-align:middle;">map</span> View on map
+                            </a>
+                        }
+                        @if (DetailLink() is { } dl)
+                        {
+                            <a class="vi-btn sm" style="margin-top:4px;text-decoration:none;" href="@dl">Open detail →</a>
+                        }
+                    </div>
+                </div>
+
+                @if (_sources.Count > 0)
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Provenance</span></div>
+                        <div class="vi-panel-body" style="display:flex;gap:5px;flex-wrap:wrap;">
+                            @foreach (var s in _sources.Take(12)) { <span class="vi-chip">@s</span> }
+                        </div>
+                    </div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_reasoning))
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Reasoning</span></div>
+                        <div class="vi-panel-body" style="font-size:12px;color:var(--t2);line-height:1.5;">@_reasoning</div>
+                    </div>
+                }
+            </aside>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Type { get; set; } = "";
+    [Parameter] public string Id   { get; set; } = "";
+
+    record Neighbor(string Type, string Id, string Label, string Rel, string Direction);
+
+    bool _loading = true;
+    string? _title, _summary, _reasoning;
+    double? _lat, _lon;
+    int _neighborTotal;
+    readonly List<(string Key, string Value)> _props = new();
+    readonly List<string> _sources = new();
+    Dictionary<string, List<Neighbor>> _byType = new();
+
+    string? _loadedKey;
+
+    // Graph canvas state
+    string _view = "list";
+    bool _graphRendered;
+    DotNetObjectReference<Explore>? _ref;
+    readonly Dictionary<string, string> _nodeType = new();  // node id -> type (for expansion)
+    readonly HashSet<string> _expanded = new();
+
+    void SetView(string v)
+    {
+        if (_view == v) return;
+        _view = v;
+        _graphRendered = false;   // (re)render the canvas when shown
+        StateHasChanged();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (_view == "graph" && !_graphRendered && !_loading)
+            await RenderGraphAsync();
+    }
+
+    async Task RenderGraphAsync()
+    {
+        _graphRendered = true;
+        _ref ??= DotNetObjectReference.Create(this);
+        _nodeType.Clear(); _expanded.Clear();
+
+        var nodes = new List<object> { new { id = Id, label = _title ?? Decode(Id), group = Type, value = 3 } };
+        var edges = new List<object>();
+        _nodeType[Id] = Type;
+        _expanded.Add(Id);
+
+        foreach (var grp in _byType)
+            foreach (var n in grp.Value.Take(25))   // cap per type for a readable seed graph
+            {
+                if (!_nodeType.ContainsKey(n.Id))
+                {
+                    nodes.Add(new { id = n.Id, label = n.Label, group = n.Type, value = 1 });
+                    _nodeType[n.Id] = n.Type;
+                }
+                edges.Add(new { from = Id, to = n.Id, label = n.Rel });
+            }
+
+        try
+        {
+            await JS.InvokeVoidAsync("viGraph.destroy");
+            await JS.InvokeVoidAsync("viGraph.render", "explore-graph", nodes, edges, _ref);
+        }
+        catch (Exception) { /* JS not ready; will retry on next view toggle */ }
+    }
+
+    [JSInvokable]
+    public async Task OnNodeDoubleClick(string nodeId)
+    {
+        if (_expanded.Contains(nodeId))
+        {
+            try { await JS.InvokeVoidAsync("viGraph.focusNode", nodeId, 1.1); } catch { }
+            return;
+        }
+        _expanded.Add(nodeId);
+        var type = _nodeType.TryGetValue(nodeId, out var t) ? t : "node";
+        var resp = await Api.GetObjectNeighborsAsync(type, nodeId, 40);
+
+        var nodes = new List<object>();
+        var edges = new List<object>();
+        if (resp is { ValueKind: JsonValueKind.Object } r &&
+            r.TryGetProperty("neighbors", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        {
+            var cap = 0;
+            foreach (var n in arr.EnumerateArray())
+            {
+                if (cap++ >= 30) break;
+                var nid = Str(n, "id");
+                if (string.IsNullOrWhiteSpace(nid)) continue;
+                var nt = Str(n, "type") ?? "node";
+                if (!_nodeType.ContainsKey(nid))
+                {
+                    nodes.Add(new { id = nid, label = Str(n, "label") ?? nid, group = nt, value = 1 });
+                    _nodeType[nid] = nt;
+                }
+                edges.Add(new { from = nodeId, to = nid!, label = Str(n, "rel") ?? "" });
+            }
+        }
+        try
+        {
+            await JS.InvokeVoidAsync("viGraph.expandNodes", nodes, edges);
+            await JS.InvokeVoidAsync("viGraph.focusNode", nodeId, 1.1);
+        }
+        catch { }
+    }
+
+    [JSInvokable] public Task OnNodeSelected(string _) => Task.CompletedTask;
+    [JSInvokable] public Task OnNodeDeselected() => Task.CompletedTask;
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await JS.InvokeVoidAsync("viGraph.destroy"); } catch { }
+        _ref?.Dispose();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var key = $"{Type}/{Id}";
+        if (key == _loadedKey) return;   // avoid reload loops; only reload on real nav change
+        _loadedKey = key;
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _graphRendered = false;   // re-seed the canvas for the new object
+        _title = _summary = _reasoning = null;
+        _lat = _lon = null;
+        _props.Clear(); _sources.Clear(); _byType = new(); _neighborTotal = 0;
+        StateHasChanged();
+
+        var objTask = Api.GetObjectAsync(Type, Id);
+        var nbTask  = Api.GetObjectNeighborsAsync(Type, Id);
+        var linTask = Api.GetObjectLineageAsync(Type, Id);
+        try { await Task.WhenAll(objTask, nbTask, linTask); } catch { }
+
+        ParseObject(objTask.IsCompletedSuccessfully ? objTask.Result : null);
+        ParseNeighbors(nbTask.IsCompletedSuccessfully ? nbTask.Result : null);
+        ParseLineage(linTask.IsCompletedSuccessfully ? linTask.Result : null);
+
+        _loading = false;
+        StateHasChanged();
+    }
+
+    void Go(Neighbor n) => Nav.NavigateTo($"/explore/{Uri.EscapeDataString(n.Type)}/{Uri.EscapeDataString(n.Id)}");
+
+    void ParseObject(JsonElement? el)
+    {
+        if (el is null || el.Value.ValueKind != JsonValueKind.Object) return;
+        var r = el.Value;
+        _title = Str(r, "title") ?? Decode(Id);
+        _summary = Str(r, "summary");
+        if (r.TryGetProperty("geo", out var geo) && geo.ValueKind == JsonValueKind.Object)
+        {
+            if (geo.TryGetProperty("lat", out var la) && la.ValueKind == JsonValueKind.Number) _lat = la.GetDouble();
+            if (geo.TryGetProperty("lon", out var lo) && lo.ValueKind == JsonValueKind.Number) _lon = lo.GetDouble();
+        }
+        if (r.TryGetProperty("properties", out var pr) && pr.ValueKind == JsonValueKind.Object)
+            foreach (var p in pr.EnumerateObject())
+            {
+                var v = p.Value.ValueKind switch
+                {
+                    JsonValueKind.String => p.Value.GetString(),
+                    JsonValueKind.Number => p.Value.ToString(),
+                    JsonValueKind.True => "true", JsonValueKind.False => "false",
+                    JsonValueKind.Null or JsonValueKind.Undefined => null,
+                    _ => p.Value.ToString(),
+                };
+                if (!string.IsNullOrWhiteSpace(v)) _props.Add((p.Name, v!));
+            }
+    }
+
+    void ParseNeighbors(JsonElement? el)
+    {
+        if (el is null || el.Value.ValueKind != JsonValueKind.Object) return;
+        var r = el.Value;
+        if (string.IsNullOrWhiteSpace(_title)) _title = Str(r, "label") ?? _title;
+        if (r.TryGetProperty("total", out var t) && t.ValueKind == JsonValueKind.Number) _neighborTotal = t.GetInt32();
+        if (!r.TryGetProperty("neighbors", out var arr) || arr.ValueKind != JsonValueKind.Array) return;
+        var map = new Dictionary<string, List<Neighbor>>();
+        foreach (var n in arr.EnumerateArray())
+        {
+            var nt = Str(n, "type") ?? "node";
+            var nid = Str(n, "id");
+            if (string.IsNullOrWhiteSpace(nid)) continue;
+            var nb = new Neighbor(nt, nid!, Str(n, "label") ?? nid!, Str(n, "rel") ?? "", Str(n, "direction") ?? "");
+            if (!map.TryGetValue(nt, out var list)) { list = new(); map[nt] = list; }
+            list.Add(nb);
+        }
+        _byType = map;
+    }
+
+    void ParseLineage(JsonElement? el)
+    {
+        if (el is null || el.Value.ValueKind != JsonValueKind.Object) return;
+        var r = el.Value;
+        _reasoning = Str(r, "reasoning");
+        if (r.TryGetProperty("sources", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            foreach (var s in arr.EnumerateArray())
+            {
+                var src = Str(s, "source"); var rf = Str(s, "ref");
+                if (string.IsNullOrWhiteSpace(src) && string.IsNullOrWhiteSpace(rf)) continue;
+                _sources.Add(string.IsNullOrWhiteSpace(rf) ? src! : $"{src}:{rf}");
+            }
+    }
+
+    string? DetailLink() => Type switch
+    {
+        "event"  => $"/events/{Uri.EscapeDataString(Id)}",
+        "actor" or "organization" => $"/entities/{Uri.EscapeDataString(Id)}",
+        "asset"  => $"/assets/{Uri.EscapeDataString(Id)}",
+        _ => null,
+    };
+
+    static string? Str(JsonElement el, string p)
+        => el.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+    static string Decode(string v) => Uri.UnescapeDataString(v ?? "");
+    static string GroupLabel(string t) => t switch
+    {
+        "event" => "Events", "actor" => "Actors", "location" => "Locations",
+        "organization" => "Organizations", "theme" => "Themes",
+        "narrative" => "Narratives", "signal" => "Signals", _ => t.ToUpperInvariant(),
+    };
+    static string TypeCls(string t) => t.ToLowerInvariant() switch
+    {
+        "event" => "warn", "actor" => "ok", "location" => "info",
+        "organization" => "ok", "signal" => "", _ => "",
+    };
+}

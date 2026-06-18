@@ -1,0 +1,137 @@
+@inject WorkspaceService WorkspaceSvc
+@inject NavigationManager Nav
+@inject ToastService Toast
+
+<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;">
+    <span class="vi-kicker" style="margin:0;">Pinned Evidence</span>
+    <span class="vi-chip info">@(_items?.Count ?? 0)</span>
+    @if (_typeCounts.Count > 0)
+    {
+        <button class="vi-chip @(_filter == "" ? "info" : "")" @onclick='() => _filter = ""'>ALL</button>
+        @foreach (var (type, count) in _typeCounts)
+        {
+            <button class="vi-chip @(_filter == type ? "info" : "")" @onclick="() => _filter = type">
+                @type.ToUpperInvariant() <span style="opacity:.65;">@count</span>
+            </button>
+        }
+    }
+    <button class="vi-btn sm" style="margin-left:auto;" disabled="@_loading" @onclick="LoadAsync">
+        <span class="material-symbols-outlined" style="font-size:13px;vertical-align:middle;">refresh</span> Reload
+    </button>
+</div>
+
+@if (_loading && _items is null)
+{
+    <LoadingState Message="LOADING EVIDENCE" />
+}
+else if (_items is null || _items.Count == 0)
+{
+    <EmptyState Icon="push_pin"
+                Message="No evidence pinned yet. Use the Pin button on developments, entities, or assets to build the board." />
+}
+else
+{
+    var shown = string.IsNullOrEmpty(_filter) ? _items : _items.Where(i => i.ItemType == _filter).ToList();
+    <div class="vi-stack" style="gap:8px;">
+        @foreach (var item in shown)
+        {
+            <div class="vi-panel" style="padding:12px;">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+                    <div style="flex:1;min-width:0;">
+                        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
+                            <span class="vi-chip @TypeCls(item.ItemType)">@item.ItemType.ToUpperInvariant()</span>
+                            @if (!string.IsNullOrWhiteSpace(item.Source)) { <span class="vi-chip">@item.Source</span> }
+                        </div>
+                        <div style="font-size:13px;font-weight:500;line-height:1.35;@(LinkFor(item) is null ? "" : "cursor:pointer;")"
+                             @onclick="() => Open(item)">@item.Title</div>
+                        @if (!string.IsNullOrWhiteSpace(item.Note))
+                        {
+                            <div style="font-size:11px;color:var(--t2);margin-top:5px;line-height:1.45;">@item.Note</div>
+                        }
+                        <div class="vi-kicker" style="margin-top:6px;">
+                            @(string.IsNullOrWhiteSpace(item.PinnedBy) ? "pinned" : $"pinned by {item.PinnedBy}")
+                            · @item.CreatedAt.ToString("yyyy-MM-dd HH:mm")
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:6px;flex-shrink:0;">
+                        @if (LinkFor(item) is { } href)
+                        {
+                            <a class="vi-chip info" href="@href">Open →</a>
+                        }
+                        <button class="vi-btn sm" title="Unpin" disabled="@_busy.Contains(item.Id)"
+                                @onclick="() => UnpinAsync(item)">
+                            <span class="material-symbols-outlined" style="font-size:14px;">delete</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string Slug { get; set; } = "";
+
+    List<WorkspaceEvidenceItem>? _items;
+    Dictionary<string, int> _typeCounts = new();
+    readonly HashSet<Guid> _busy = new();
+    string _filter = "";
+    bool _loading;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var resp = await WorkspaceSvc.GetEvidenceAsync(Slug);
+            _items = resp?.Items ?? new();
+            _typeCounts = _items
+                .GroupBy(i => i.ItemType)
+                .ToDictionary(g => g.Key, g => g.Count());
+        }
+        catch (Exception ex) { Toast.ShowError($"Failed to load evidence: {ex.Message}"); }
+        finally { _loading = false; }
+    }
+
+    async Task UnpinAsync(WorkspaceEvidenceItem item)
+    {
+        _busy.Add(item.Id);
+        try
+        {
+            if (await WorkspaceSvc.UnpinEvidenceAsync(Slug, item.Id))
+            {
+                _items?.Remove(item);
+                _typeCounts = (_items ?? new())
+                    .GroupBy(i => i.ItemType)
+                    .ToDictionary(g => g.Key, g => g.Count());
+                Toast.ShowSuccess("Unpinned");
+            }
+            else { Toast.ShowError("Could not unpin item."); }
+        }
+        finally { _busy.Remove(item.Id); }
+    }
+
+    void Open(WorkspaceEvidenceItem item)
+    {
+        if (LinkFor(item) is { } href) Nav.NavigateTo(href);
+    }
+
+    string? LinkFor(WorkspaceEvidenceItem item) => item.ItemType switch
+    {
+        "event"  => $"/events/{Uri.EscapeDataString(item.ItemId)}?from={Uri.EscapeDataString(Slug)}",
+        "entity" => $"/entities/{Uri.EscapeDataString(item.ItemId)}",
+        "asset"  => $"/assets/{Uri.EscapeDataString(item.ItemId)}",
+        _        => null,
+    };
+
+    static string TypeCls(string type) => type switch
+    {
+        "event"     => "warn",
+        "asset"     => "info",
+        "entity"    => "ok",
+        "narrative" => "",
+        _           => "",
+    };
+}

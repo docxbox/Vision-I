@@ -1,0 +1,264 @@
+@using System.Net
+
+@if (Sentiment is null)
+{
+    <EmptyState Message="No sentiment data." />
+}
+else
+{
+    var redditItems = Sentiment.RedditItems ?? [];
+    var youtubeItems = Sentiment.YoutubeItems ?? [];
+    var sourceItems = Sentiment.SocialItems?.Count > 0
+        ? Sentiment.SocialItems
+        : redditItems.Concat(youtubeItems).OrderByDescending(i => i.Timestamp).ToList();
+    var rdTotal = Math.Max(Sentiment.Reddit.Sum(p => p.EventCount), redditItems.Count);
+    var ytTotal = Math.Max(Sentiment.Youtube.Sum(p => p.EventCount), youtubeItems.Count);
+    var cbTotal = Sentiment.Combined.Sum(p => p.EventCount);
+    var hasSocial = Sentiment.SocialEventCount > 0 || rdTotal > 0 || ytTotal > 0 || cbTotal > 0 || sourceItems.Count > 0;
+    var cs = Sentiment.CombinedSentimentScore;
+    var cCls = !hasSocial ? "warn" : cs > 0.55 ? "ok" : cs < 0.45 ? "err" : "warn";
+    var cLbl = !hasSocial ? "No Signal" : cs > 0.55 ? "Positive" : cs < 0.45 ? "Negative" : "Neutral";
+    var events = ContextEvents().Take(8).ToList();
+    var entities = ContextEntities().Take(8).ToList();
+    var interp = BuildSocialInterpretation(hasSocial, rdTotal, ytTotal);
+
+    <div class="vi-metrics" style="margin-bottom:16px;">
+        <div class="vi-metric"><div class="vi-metric-label">Social Coverage</div><div class="vi-metric-val @cCls">@(hasSocial ? "LIVE" : "GAP")</div></div>
+        <div class="vi-metric"><div class="vi-metric-label">Direction</div><div class="vi-metric-val @cCls">@cLbl</div></div>
+        <div class="vi-metric"><div class="vi-metric-label">Reddit Matched</div><div class="vi-metric-val">@rdTotal</div></div>
+        <div class="vi-metric"><div class="vi-metric-label">YouTube Matched</div><div class="vi-metric-val">@ytTotal</div></div>
+        <div class="vi-metric"><div class="vi-metric-label">Workspace Events</div><div class="vi-metric-val">@(Overview?.EventCount ?? Developments?.EventCount ?? 0)</div></div>
+    </div>
+
+    @if (!hasSocial)
+    {
+        <div class="vi-panel" style="margin-bottom:14px;border-left:3px solid var(--warn);">
+            <div class="vi-panel-hdr">
+                <span class="material-symbols-outlined" style="font-size:15px;color:var(--warn);">wifi_off</span>
+                <span class="vi-panel-title">Provider Coverage Gap</span>
+                <span class="vi-chip warn">LOW CONFIDENCE</span>
+            </div>
+            <div class="vi-panel-body" style="font-size:13px;color:var(--t2);line-height:1.65;">
+                Reddit and YouTube did not return matched posts for this workspace window. Treat the social direction as unknown, not neutral. The workspace context below is derived from related events and entities so the page still carries operational signal while social providers are quiet or unavailable.
+            </div>
+        </div>
+    }
+
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-bottom:14px;">
+        @RenderSentimentCard("Reddit", Sentiment.Reddit, "forum")
+        @RenderSentimentCard("YouTube", Sentiment.Youtube, "smart_display")
+    </div>
+
+    <div class="vi-panel" style="margin-bottom:14px;">
+        <div class="vi-panel-hdr">
+            <span class="material-symbols-outlined" style="font-size:15px;color:var(--acc);">source</span>
+            <span class="vi-panel-title">Readable Social Sources</span>
+            <span class="vi-chip">@sourceItems.Count ITEMS</span>
+        </div>
+        @if (sourceItems.Count == 0)
+        {
+            <div class="vi-empty">No readable Reddit or YouTube posts are available yet for this workspace query.</div>
+        }
+        else
+        {
+            <div class="vi-panel-body" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:10px;">
+                @foreach (var item in sourceItems.Take(12))
+                {
+                    var scoreClass = ScoreClass(item.SentimentScore);
+                    <article style="border:1px solid var(--bd);border-radius:12px;background:rgba(255,255,255,.025);padding:12px;min-width:0;">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                            <span class="material-symbols-outlined" style="font-size:16px;color:var(--acc);">@SourceIcon(item.Source)</span>
+                            <span class="vi-chip">@item.Source.ToUpperInvariant()</span>
+                            @if (item.SentimentScore.HasValue)
+                            {
+                                <span class="vi-chip @scoreClass">@item.SentimentScore.Value.ToString("F2")</span>
+                            }
+                            <span style="margin-left:auto;color:var(--tf);font-size:11px;">@PrettyDate(item.Timestamp)</span>
+                        </div>
+                        <div class="vi-td-title" style="font-size:14px;line-height:1.35;margin-bottom:6px;">@item.Title</div>
+                        @if (!string.IsNullOrWhiteSpace(item.Description) && item.Description != item.Title)
+                        {
+                            <div style="color:var(--t2);font-size:12px;line-height:1.55;margin-bottom:10px;">@TrimText(item.Description, 220)</div>
+                        }
+                        <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;">
+                            <span class="vi-kicker vi-trunc">@(string.IsNullOrWhiteSpace(item.Author) ? "source item" : item.Author)</span>
+                            @if (!string.IsNullOrWhiteSpace(item.Url))
+                            {
+                                <a class="vi-btn sm" href="@item.Url" target="_blank" rel="noopener noreferrer">Read source</a>
+                            }
+                        </div>
+                    </article>
+                }
+            </div>
+        }
+    </div>
+
+    @if (!hasSocial)
+    {
+        <div style="display:grid;grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr);gap:12px;margin-bottom:14px;">
+            <div class="vi-panel">
+                <div class="vi-panel-hdr">
+                    <span class="material-symbols-outlined" style="font-size:15px;color:var(--acc);">newsmode</span>
+                    <span class="vi-panel-title">Workspace Signal Feed</span>
+                    <span class="vi-chip">@events.Count EVENTS</span>
+                </div>
+                @if (events.Count == 0)
+                {
+                    <div class="vi-empty">No related developments are loaded yet.</div>
+                }
+                else
+                {
+                    <div class="vi-panel-body vi-stack" style="gap:0;">
+                        @foreach (var ev in events)
+                        {
+                            var rCls = ev.RiskScore >= 0.7 ? "err" : ev.RiskScore >= 0.4 ? "warn" : "";
+                            <a href="/events/@Uri.EscapeDataString(ev.EventId)" style="display:block;text-decoration:none;color:inherit;padding:10px 0;border-bottom:1px solid var(--bd);">
+                                <div style="display:flex;gap:8px;align-items:flex-start;">
+                                    <span class="material-symbols-outlined" style="font-size:16px;color:var(--acc);margin-top:1px;">bolt</span>
+                                    <div style="min-width:0;flex:1;">
+                                        <div class="vi-td-title vi-trunc">@ev.Title</div>
+                                        <div class="vi-kicker" style="margin-top:4px;">@ev.Source @(!string.IsNullOrWhiteSpace(ev.Region) ? $" / {ev.Region}" : "")</div>
+                                    </div>
+                                    @if (ev.RiskScore.HasValue) { <span class="vi-chip @rCls">@ev.RiskScore.Value.ToString("F2")</span> }
+                                </div>
+                            </a>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="vi-panel">
+                <div class="vi-panel-hdr">
+                    <span class="material-symbols-outlined" style="font-size:15px;color:var(--acc);">groups</span>
+                    <span class="vi-panel-title">Conversation Anchors</span>
+                    <span class="vi-chip">@entities.Count ENTITIES</span>
+                </div>
+                @if (entities.Count == 0)
+                {
+                    <div class="vi-empty">No entity anchors loaded.</div>
+                }
+                else
+                {
+                    <div class="vi-panel-body vi-stack" style="gap:8px;">
+                        @foreach (var ent in entities)
+                        {
+                            <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;border-bottom:1px solid var(--bd);padding-bottom:8px;">
+                                <div style="min-width:0;">
+                                    <div class="vi-td-title vi-trunc">@ent.Name</div>
+                                    <div class="vi-kicker">@(ent.EntityType ?? "ENTITY")</div>
+                                </div>
+                                <span class="vi-chip info">@ent.EventCount events</span>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    @RenderSentimentCard("Combined Social", Sentiment.Combined, "monitoring")
+
+    @if (!string.IsNullOrWhiteSpace(interp))
+    {
+        <div class="vi-panel" style="margin-top:14px;">
+            <div class="vi-panel-hdr">
+                <span class="material-symbols-outlined" style="font-size:15px;color:var(--acc);">insights</span>
+                <span class="vi-panel-title">Interpretation</span>
+            </div>
+            <div class="vi-panel-body" style="font-size:13px;color:var(--t2);line-height:1.65;">@interp</div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public WorkspaceSentiment?    Sentiment    { get; set; }
+    [Parameter] public WorkspaceOverview?     Overview     { get; set; }
+    [Parameter] public WorkspaceEntities?     Entities     { get; set; }
+    [Parameter] public WorkspaceDevelopments? Developments { get; set; }
+
+    IEnumerable<WorkspaceEventItem> ContextEvents()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var ev in Developments?.Events ?? [])
+            if (seen.Add(ev.EventId)) yield return ev;
+        foreach (var ev in Overview?.TopEvents ?? [])
+            if (seen.Add(ev.EventId)) yield return ev;
+    }
+
+    IEnumerable<WorkspaceEntityItem> ContextEntities() =>
+        (Entities?.EntityItems ?? [])
+            .OrderByDescending(e => e.EventCount)
+            .ThenByDescending(e => e.Count);
+
+    static string SourceIcon(string? source) => (source ?? "").ToLowerInvariant() switch
+    {
+        "youtube" => "smart_display",
+        "reddit" => "forum",
+        "telegram" => "send",
+        "twitter" => "alternate_email",
+        _ => "article"
+    };
+
+    static string ScoreClass(double? score) =>
+        score is null ? "" : score > 0.55 ? "ok" : score < 0.45 ? "err" : "warn";
+
+    static string PrettyDate(string? value)
+    {
+        if (DateTime.TryParse(value, out var dt))
+            return dt.ToUniversalTime().ToString("MM-dd HH:mm");
+        return "";
+    }
+
+    static string TrimText(string? text, int max)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "";
+        var clean = WebUtility.HtmlDecode(text).Trim();
+        return clean.Length <= max ? clean : clean[..max].TrimEnd() + "...";
+    }
+
+    string BuildSocialInterpretation(bool hasSocial, int rdTotal, int ytTotal)
+    {
+        if (Sentiment is null) return "";
+        if (!hasSocial)
+            return "No matched Reddit or YouTube social posts are available for this workspace window. This should be read as a provider or matching gap, not public calm. Use the event feed and entity anchors above as the current operational context until social ingestion produces matched posts.";
+
+        var cs = Sentiment.CombinedSentimentScore;
+        var driver = rdTotal == ytTotal ? "Reddit and YouTube" : rdTotal > ytTotal ? "Reddit" : "YouTube";
+        var direction = cs > 0.55 ? "positive and strengthening" : cs < 0.45 ? "negative and active" : "mixed or neutral";
+        return $"Social conversation is {direction}. {driver} is the primary activity driver with {Math.Max(rdTotal, ytTotal)} matched posts in the monitoring window.";
+    }
+
+    RenderFragment RenderSentimentCard(string label, List<WorkspaceSentimentPoint>? points, string icon) => __builder =>
+    {
+        __builder.OpenElement(0, "div");
+        __builder.AddAttribute(1, "class", "vi-panel");
+        __builder.AddAttribute(2, "style", "padding:14px;");
+        __builder.AddMarkupContent(3,
+            $"<div style=\"display:flex;align-items:center;gap:7px;margin-bottom:8px;\">" +
+            $"<span class=\"material-symbols-outlined\" style=\"font-size:15px;color:var(--acc);\">{icon}</span>" +
+            $"<span class=\"vi-kicker\">{WebUtility.HtmlEncode(label)}</span></div>");
+        if (points is null || points.Count == 0)
+        {
+            __builder.AddMarkupContent(4, "<div class=\"vi-empty\" style=\"padding:12px 0;font-size:12px;\">No matched posts from this provider in the current workspace window.</div>");
+        }
+        else
+        {
+            int s = 10;
+            __builder.AddMarkupContent(s++,
+                "<div style=\"display:grid;grid-template-columns:1fr auto auto;gap:4px 12px;font-size:11px;margin-bottom:2px;color:var(--tf);\">" +
+                "<span>Date</span><span style=\"text-align:right;\">Score</span><span style=\"text-align:right;\">Posts</span></div>");
+            foreach (var p in points.TakeLast(7))
+            {
+                var day = p.Bucket.Length > 10 ? p.Bucket[..10] : p.Bucket;
+                var pct = (int)(p.AvgScore * 100);
+                var col = p.AvgScore > 0.55 ? "var(--ok)" : p.AvgScore < 0.45 ? "var(--err)" : "var(--warn)";
+                __builder.AddMarkupContent(s++,
+                    $"<div style=\"display:grid;grid-template-columns:1fr auto auto;gap:4px 12px;font-size:11px;padding:3px 0;border-bottom:1px solid var(--bd);\">" +
+                    $"<span style=\"color:var(--tm);\">{WebUtility.HtmlEncode(day)}</span>" +
+                    $"<span style=\"text-align:right;color:{col};font-weight:600;\">{pct}%</span>" +
+                    $"<span style=\"text-align:right;color:var(--tf);\">{p.EventCount}</span></div>");
+            }
+        }
+        __builder.CloseElement();
+    };
+}

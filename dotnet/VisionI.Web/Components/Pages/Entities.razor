@@ -1,0 +1,288 @@
+@page "/entities"
+@page "/entities/{EntityId}"
+@inject EntityService Svc
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>Entities | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Explain / Entities</div>
+            <h1 class="vi-h1">Entity Profiles</h1>
+            <div class="vi-sub">ACTORS · ORGANIZATIONS · LOCATIONS</div>
+        </div>
+        <div class="vi-page-actions">
+            <span class="vi-chip info">@DisplayEntityCount entities</span>
+            <button class="vi-btn" disabled="@Svc.ListLoading" @onclick="Svc.LoadListAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Total</div>
+            <div class="vi-metric-val accent">@DisplayEntityCount</div>
+            <div style="font-size:11px;color:var(--tf);">@(Svc.DirectoryTotal > 0 ? $"{Svc.DirectoryTotal:N0} indexed" : "focused dossier")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Filtered</div>
+            <div class="vi-metric-val">@Math.Max(Svc.FilteredEntities.Count, Svc.Detail is null ? 0 : 1)</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Type Filter</div>
+            <div class="vi-metric-val" style="font-size:14px;">@(string.IsNullOrWhiteSpace(Svc.FilterType) ? "ALL" : Svc.FilterType.ToUpperInvariant())</div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="vi-filter-bar">
+        <input class="vi-input sm" placeholder="Search entities…" style="width:200px;"
+               value="@Svc.FilterText"
+               @oninput="e => Svc.OnSearchInputAsync(e.Value?.ToString() ?? string.Empty)" />
+        <select class="vi-select sm" style="width:140px;" @bind="Svc.FilterType"
+                @bind:after="Svc.ApplyListFilter">
+            <option value="">All types</option>
+            <option value="person">Person</option>
+            <option value="organization">Organization</option>
+            <option value="location">Location</option>
+            <option value="group">Group</option>
+        </select>
+    </div>
+
+    @if (Svc.ListLoading)
+    {
+        <div class="vi-loading">LOADING ENTITIES</div>
+    }
+    else if (Svc.AllEntities.Count == 0 && Svc.Detail is null)
+    {
+        <div class="vi-empty">
+            <span class="material-symbols-outlined">hub</span>
+            No entity profiles available — the graph layer may be offline or no events have been ingested yet.
+            <div style="margin-top:8px;display:flex;gap:8px;">
+                <a class="vi-btn sm" href="/ingest">Ingest →</a>
+                <button class="vi-btn sm" @onclick="Svc.LoadListAsync">Retry</button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="vi-split" style="flex:1;min-height:0;">
+            <!-- Entity list -->
+            <div class="vi-panel">
+                <div class="vi-tbl-wrap">
+                    <table class="vi-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Country</th>
+                                <th>Mentions</th>
+                                <th>Influence</th>
+                                <th>Narrative</th>
+                                <th>Sentiment</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!Svc.FilteredEntities.Any())
+                            {
+                                @if (Svc.Detail is { } focused)
+                                {
+                                    <tr class="sel" style="cursor:pointer;">
+                                        <td><div class="vi-td-title">@focused.Name</div></td>
+                                        <td><span class="vi-chip @EntityService.GetTypeClass(focused.Type)">@focused.Type</span></td>
+                                        <td class="vi-td-mono">@(focused.Country ?? "—")</td>
+                                        <td class="vi-td-mono">@focused.Mentions</td>
+                                        <td class="vi-td-mono">@(focused.Influence.ToString("0.00"))</td>
+                                        <td class="vi-td-mono">@(EntityService.ScoreNarrative(focused.NarrativeCount, focused.EventCount, focused.Mentions).ToString("0.00"))</td>
+                                        <td><span class="vi-chip @EntityService.GetSentimentClass(focused.Sentiment)">@(focused.Sentiment.ToString("0.0"))</span></td>
+                                    </tr>
+                                }
+                                else
+                                {
+                                    <tr><td colspan="7" style="text-align:center;padding:20px;">
+                                        <span class="vi-faint">No entities match current filters</span>
+                                    </td></tr>
+                                }
+                            }
+                            @foreach (var e in Svc.FilteredEntities)
+                            {
+                                <tr class="@(Svc.Detail?.EntityId == e.Id ? "sel" : "")"
+                                    style="cursor:pointer;"
+                                    @onclick='() => Nav.NavigateTo($"/entities/{Uri.EscapeDataString(e.Id)}")'>
+                                    <td><div class="vi-td-title">@e.Name</div></td>
+                                    <td><span class="vi-chip @EntityService.GetTypeClass(e.Type)">@e.Type</span></td>
+                                    <td class="vi-td-mono">@(e.Country ?? "—")</td>
+                                    <td class="vi-td-mono">@e.MentionCount</td>
+                                    <td class="vi-td-mono">@(e.Influence.ToString("0.00"))</td>
+                                    <td class="vi-td-mono">@(e.NarrativeScore.ToString("0.00"))</td>
+                                    <td><span class="vi-chip @EntityService.GetSentimentClass(e.Sentiment)">@(e.Sentiment.ToString("0.0"))</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Detail -->
+            <div class="vi-panel soft">
+                @if (Svc.DetailLoading)
+                {
+                    <div class="vi-loading">LOADING</div>
+                }
+                else if (Svc.Detail is { } d)
+                {
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">@d.Name</span>
+                        <span class="vi-chip @EntityService.GetTypeClass(d.Type)">@d.Type</span>
+                    </div>
+                    <div class="vi-panel-body vi-stack">
+                        <div class="vi-detail">
+                            @if (!string.IsNullOrWhiteSpace(d.Country))
+                            {
+                                <div class="vi-detail-row"><span class="vi-detail-key">Country</span><span class="vi-detail-val">@d.Country</span></div>
+                            }
+                            <div class="vi-detail-row"><span class="vi-detail-key">Mentions</span><span class="vi-detail-val">@d.Mentions</span></div>
+                            <div class="vi-detail-row"><span class="vi-detail-key">Events</span><span class="vi-detail-val">@d.EventCount</span></div>
+                            <div class="vi-detail-row"><span class="vi-detail-key">Influence</span><span class="vi-detail-val">@(d.Influence.ToString("0.00"))</span></div>
+                            <div class="vi-detail-row"><span class="vi-detail-key">Narrative</span><span class="vi-detail-val">@(EntityService.ScoreNarrative(d.NarrativeCount, d.EventCount, d.Mentions).ToString("0.00"))</span></div>
+                            <div class="vi-detail-row"><span class="vi-detail-key">Sentiment</span><span class="vi-detail-val">@(d.Sentiment.ToString("0.00"))</span></div>
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(d.Description))
+                        {
+                            <div>
+                                <div class="vi-label">Description</div>
+                                <div style="font-size:13px;color:var(--t2);line-height:1.6;">@d.Description</div>
+                            </div>
+                        }
+
+                        @if (Svc.Wiki is { } wiki)
+                        {
+                            <div class="vi-panel" style="background:rgba(139,92,246,0.08);border-color:rgba(167,139,250,0.28);">
+                                <div class="vi-panel-hdr">
+                                    <span class="vi-panel-title">Open-source profile</span>
+                                    <span class="vi-chip info">@(wiki.ServedFrom == "wikipedia" ? "Wikipedia" : "Fallback")</span>
+                                </div>
+                                <div style="display:flex;gap:12px;align-items:flex-start;">
+                                    @if (!string.IsNullOrWhiteSpace(wiki.ThumbnailUrl))
+                                    {
+                                        <img src="@wiki.ThumbnailUrl" alt="@wiki.Title" style="width:72px;height:72px;object-fit:cover;border-radius:12px;border:1px solid var(--bd);" />
+                                    }
+                                    <div style="min-width:0;">
+                                        <div style="font-size:14px;font-weight:700;color:var(--t);">@wiki.Title</div>
+                                        @if (!string.IsNullOrWhiteSpace(wiki.Description))
+                                        {
+                                            <div class="vi-faint" style="font-size:11px;margin:2px 0 6px;">@wiki.Description</div>
+                                        }
+                                        <div style="font-size:12px;color:var(--t2);line-height:1.55;">@wiki.Extract</div>
+                                        @if (!string.IsNullOrWhiteSpace(wiki.PageUrl))
+                                        {
+                                            <a class="vi-btn sm" href="@wiki.PageUrl" target="_blank" rel="noopener noreferrer" style="margin-top:8px;">
+                                                View source
+                                            </a>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                        }
+
+                        @if (d.Aliases.Any())
+                        {
+                            <div>
+                                <div class="vi-label">Aliases</div>
+                                <div class="vi-tags">
+                                    @foreach (var a in d.Aliases)
+                                    {
+                                        <span class="vi-chip">@a</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+
+                        @if (d.CoActors.Any())
+                        {
+                            <div>
+                                <div class="vi-label">Co-occurring Actors</div>
+                                <div class="vi-tags">
+                                    @foreach (var co in d.CoActors.Take(8))
+                                    {
+                                        <span class="vi-chip info">@co.Name</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
+                            <a class="vi-btn sm" href="/timeline?q=@Uri.EscapeDataString(d.Name)">
+                                <span class="material-symbols-outlined" style="font-size:13px;">timeline</span>
+                                Timeline
+                            </a>
+                            <a class="vi-btn sm" href="/graph?actor=@Uri.EscapeDataString(d.Name)">
+                                <span class="material-symbols-outlined" style="font-size:13px;">account_tree</span>
+                                Graph
+                            </a>
+                        </div>
+
+                        @if (d.RecentEvents.Any())
+                        {
+                            <div>
+                                <div class="vi-label">Recent Events</div>
+                                <div class="vi-stack">
+                                    @foreach (var ev in d.RecentEvents.Take(5))
+                                    {
+                                        <div class="vi-item" style="padding:6px 8px;">
+                                            <div class="vi-item-main">
+                                                <div class="vi-item-title vi-trunc">@ev.Title</div>
+                                                <div class="vi-item-meta">
+                                                    <span class="vi-chip @RiskCls(ev.RiskScore)">@(ev.RiskScore.ToString("0.0"))</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="vi-empty">
+                        <span class="material-symbols-outlined">groups</span>
+                        Select an entity to inspect
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string? EntityId { get; set; }
+    private string? _loadedEntityId;
+    private int DisplayEntityCount => Svc.DirectoryTotal > 0
+        ? Svc.DirectoryTotal
+        : Math.Max(Svc.AllEntities.Count, Svc.Detail is null ? 0 : 1);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (string.IsNullOrWhiteSpace(EntityId) || string.Equals(EntityId, _loadedEntityId, StringComparison.Ordinal))
+            return;
+
+        _loadedEntityId = EntityId;
+        await Svc.EnsureLoadedAsync();
+        await Svc.LoadDetailAsync(Uri.UnescapeDataString(EntityId));
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    static string RiskCls(double v) => v switch { > 0.7 => "err", > 0.4 => "warn", _ => "" };
+
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+}

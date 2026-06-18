@@ -1,0 +1,408 @@
+# ── Vision-I Production Stack ──────────────────────────────────────────────────
+# Startup order (enforced by depends_on):
+#
+#   neo4j  ← starts first, no dependencies
+#     ↓ service_started  (JVM is up, takes ~1 s)
+#   postgres + redis  ← start in parallel after neo4j container is running
+#     ↓ service_healthy  (postgres ~10 s, redis ~3 s)
+#     + neo4j service_healthy  (takes 3–5 min for APOC cold start)
+#   python-api  ← waits for all three healthy
+#     ↓ service_healthy  (~2 min after deps pass)
+#   python-worker + dotnet-api  ← parallel, after python-api healthy
+#     ↓ service_healthy
+#   dotnet-web
+#
+# Only dotnet-api (:5000) and dotnet-web (:5001) are exposed to the host.
+# For dev port overrides (Neo4j browser, etc.) use docker-compose.override.yml.
+
+services:
+
+  # ── Neo4j (first — JVM cold-start takes 3-5 min, must begin before anything) ──
+  neo4j:
+    image: neo4j:5-community
+    container_name: vision_neo4j
+    restart: unless-stopped
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
+      - NEO4J_PLUGINS=["apoc"]
+      # Neo4j 5 env-var encoding: dot → _, original_underscore → __
+      # server.memory.heap.initial_size  → NEO4J_server_memory_heap_initial__size
+      # server.memory.heap.max_size      → NEO4J_server_memory_heap_max__size
+      # server.memory.pagecache.size     → NEO4J_server_memory_pagecache_size  (dot only → single _)
+      - NEO4J_server_memory_heap_initial__size=256m
+      - NEO4J_server_memory_heap_max__size=512m
+      - NEO4J_server_memory_pagecache_size=256m
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    networks:
+      - vision_net
+    # Neo4j ports — internal only in prod. Uncomment for local dev/browser access.
+    # ports:
+    #   - "7474:7474"
+    #   - "7687:7687"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474/ || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 600s   # Neo4j 5 + APOC cold start takes ~6-7 min on this machine
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────────
+  # Waits for neo4j container to be running (service_started) before launching,
+  # so Neo4j gets uncontested CPU/memory during its JVM boot.
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: vision_postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=VisionIDB
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - vision_net
+    depends_on:
+      neo4j:
+        condition: service_started   # neo4j container running; does NOT wait for it to be healthy
+    # NOT exposed to host — internal only
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d VisionIDB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # ── Redis (Event Bus + Distributed Cache) ────────────────────────────────────
+  # Same rationale as postgres — starts after neo4j container is running.
+  redis:
+    image: redis:7-alpine
+    container_name: vision_redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - vision_net
+    depends_on:
+      neo4j:
+        condition: service_started   # neo4j container running; does NOT wait for it to be healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 300M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Python FastAPI Intelligence Layer ────────────────────────────────────────
+  python-api:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    container_name: vision_python_api
+    init: true
+    restart: unless-stopped
+    env_file: ./python/.env
+    volumes:
+      - hf_cache:/home/visionuser/.cache/huggingface
+      - ./debuglogs:/app/debuglogs
+      - ./python/data:/app/data
+    environment:
+      - ALLOWED_ORIGINS=http://dotnet-api:5000
+      - POSTGRES_DSN=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/VisionIDB
+      - POSTGRES_DSN_SYNC=postgresql+psycopg2://postgres:${POSTGRES_PASSWORD}@postgres:5432/VisionIDB
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASS=${NEO4J_PASSWORD}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - APP_ENV=production
+      - DB_STATEMENT_TIMEOUT_MS=${PYTHON_API_DB_STATEMENT_TIMEOUT_MS:-20000}
+      # Keep HTTP API responsive: no heavy background jobs in this process.
+      - RUN_SCHEDULER=false
+      - RUN_PIPELINE_WORKER=false
+      - LOAD_EMBEDDER_ON_STARTUP=false
+      - BOOTSTRAP_LIVE_ON_STARTUP=false
+      - LOG_JSON=true
+      - VISION_CLASSIFICATION=${VISION_CLASSIFICATION:-UNCLASSIFIED // FOR OFFICIAL USE ONLY}
+      - VISION_CLASSIFICATION_COLOR=${VISION_CLASSIFICATION_COLOR:-#15B371}
+      - TWITTER_BEARER_TOKEN=${TWITTER_BEARER_TOKEN:-}
+      - NOTAM_FEED_PATH=/app/data/notams.sample.json
+      - SAT_TLE_PATH=/app/data/tles.active.tle
+      - SAT_TLE_URL=${SAT_TLE_URL:-https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle}
+      - SAT_TLE_CACHE_TTL_HOURS=${SAT_TLE_CACHE_TTL_HOURS:-12}
+      # LLM inference — Groq is the primary provider (set GROQ_API_KEY in .env)
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-llama-3.3-70b-versatile}
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - vision_net
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "--max-time", "30", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 35s
+      retries: 10
+      start_period: 180s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── Python Background Worker (Scheduler + Pipelines) ─────────────────────────
+  python-worker:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    container_name: vision_python_worker
+    init: true
+    restart: unless-stopped
+    env_file: ./python/.env
+    volumes:
+      - hf_cache:/home/visionuser/.cache/huggingface
+      - ./debuglogs:/app/debuglogs
+      - ./python/data:/app/data
+    environment:
+      - ALLOWED_ORIGINS=http://dotnet-api:5000
+      - POSTGRES_DSN=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/VisionIDB
+      - POSTGRES_DSN_SYNC=postgresql+psycopg2://postgres:${POSTGRES_PASSWORD}@postgres:5432/VisionIDB
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASS=${NEO4J_PASSWORD}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - APP_ENV=production
+      - DB_STATEMENT_TIMEOUT_MS=${PYTHON_WORKER_DB_STATEMENT_TIMEOUT_MS:-60000}
+      # Worker enables background compute
+      - RUN_SCHEDULER=true
+      - RUN_PIPELINE_WORKER=true
+      - LOAD_EMBEDDER_ON_STARTUP=true
+      - BOOTSTRAP_LIVE_ON_STARTUP=true
+      # Scheduler pacing — keep heavy jobs from overlapping the ingest cycle
+      - LIVE_INTERVAL_SECONDS=${LIVE_INTERVAL_SECONDS:-600}
+      - TEXT_INTERVAL_SECONDS=${TEXT_INTERVAL_SECONDS:-3600}
+      - NARRATIVE_INTERVAL_SECONDS=${NARRATIVE_INTERVAL_SECONDS:-3600}
+      - ANOMALY_INTERVAL_SECONDS=${ANOMALY_INTERVAL_SECONDS:-7200}
+      # OpenSky + AISStream creds live in ./python/.env — do NOT override here
+      # (an empty override would clobber env_file values).
+      - LOG_JSON=true
+      - VISION_CLASSIFICATION=${VISION_CLASSIFICATION:-UNCLASSIFIED // FOR OFFICIAL USE ONLY}
+      - VISION_CLASSIFICATION_COLOR=${VISION_CLASSIFICATION_COLOR:-#15B371}
+      - TWITTER_BEARER_TOKEN=${TWITTER_BEARER_TOKEN:-}
+      - NOTAM_FEED_PATH=/app/data/notams.sample.json
+      - SAT_TLE_PATH=/app/data/tles.active.tle
+      - SAT_TLE_URL=${SAT_TLE_URL:-https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle}
+      - SAT_TLE_CACHE_TTL_HOURS=${SAT_TLE_CACHE_TTL_HOURS:-12}
+      # LLM inference — Groq is the primary provider (set GROQ_API_KEY in .env)
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-llama-3.3-70b-versatile}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      python-api:
+        condition: service_healthy   # Worker starts after API confirms DB/graph wired
+    networks:
+      - vision_net
+    command: ["python", "worker.py"]
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"from pathlib import Path; import time; p=Path('/tmp/vision-worker-heartbeat.json'); raise SystemExit(0 if p.exists() and time.time()-p.stat().st_mtime < 90 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+
+  # ── .NET Web API Core (Business Logic) ───────────────────────────────────────
+  dotnet-api:
+    build:
+      context: ./dotnet
+      dockerfile: VisionI.API/Dockerfile
+    container_name: vision_dotnet_api
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - ASPNETCORE_URLS=http://+:5000
+      - ASPNETCORE_ENVIRONMENT=Production
+      - Cors__AllowedOrigins__0=http://localhost:5001
+      - Cors__AllowedOrigins__1=https://localhost:5001
+      - Cors__AllowedOrigins__2=http://127.0.0.1:5001
+      - Cors__AllowedOrigins__3=http://dotnet-web:5001
+      - PythonApi__BaseUrl=http://python-api:8000
+      - PythonApi__ApiKey=${INTERNAL_API_KEY}
+      - PythonApi__TimeoutSeconds=120
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=VisionIDB;Username=postgres;Password=${POSTGRES_PASSWORD}
+      - Jwt__Key=${JWT_KEY}
+      - Jwt__Issuer=VisionI.API
+      - Jwt__Audience=VisionI.Web
+      - Jwt__RefreshTokenExpiryDays=7
+      - Redis__ConnectionString=redis:6379
+      - VisionI__LlmEncryptionKey=${VISIONI_LLM_ENCRYPTION_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-llama-3.3-70b-versatile}
+      - Seed__AdminEmail=${SEED_ADMIN_EMAIL:-admin@vision-i.org}
+      - Seed__AdminPassword=${SEED_ADMIN_PASSWORD:-Admin1234!}
+    volumes:
+      - dotnet_api_keys:/root/.aspnet/DataProtection-Keys
+    depends_on:
+      python-api:
+        condition: service_healthy   # Ensures Python intelligence layer ready before API serves
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - vision_net
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── .NET Web App (Presentation) ──────────────────────────────────────────────
+  dotnet-web:
+    build:
+      context: ./dotnet
+      dockerfile: VisionI.Web/Dockerfile
+    container_name: vision_dotnet_web
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    environment:
+      - ASPNETCORE_URLS=http://+:5001
+      - ASPNETCORE_ENVIRONMENT=Production
+      - InternalApiBaseUrl=http://dotnet-api:5000
+      # Browser auth/data calls go through the web app's own proxy at :5001/api/*
+      - PublicApiBaseUrl=
+    volumes:
+      - dotnet_web_keys:/root/.aspnet/DataProtection-Keys
+    depends_on:
+      dotnet-api:
+        condition: service_healthy   # Web app waits for API to be serving /health
+    networks:
+      - vision_net
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+# ── Volumes ────────────────────────────────────────────────────────────────────
+volumes:
+  redis_data:
+    driver: local
+  dotnet_api_keys:
+    driver: local
+  dotnet_web_keys:
+    driver: local
+  postgres_data:
+    driver: local
+  neo4j_data:
+    driver: local
+  neo4j_logs:
+    driver: local
+  hf_cache:
+    driver: local
+
+# ── Network ────────────────────────────────────────────────────────────────────
+networks:
+  vision_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

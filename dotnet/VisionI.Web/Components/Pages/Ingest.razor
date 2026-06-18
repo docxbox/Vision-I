@@ -1,0 +1,213 @@
+@page "/ingest"
+@layout AnalystLayout
+@inject IngestService Svc
+@implements IDisposable
+
+<PageTitle>Ingest | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Support / Ingest</div>
+            <h1 class="vi-h1">Intelligence Ingest</h1>
+            <div class="vi-sub">FEED CONTROL · JOB MONITORING · LIVE PULL</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" disabled="@Svc.Busy" @onclick="Svc.LoadJobsAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Total Jobs</div>
+            <div class="vi-metric-val accent">@Svc.JobRows().Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Running</div>
+            <div class="vi-metric-val warn">@Svc.JobRows().Count(j => j.Status == "running")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Completed</div>
+            <div class="vi-metric-val ok">@Svc.JobRows().Count(j => j.Status == "completed")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Busy</div>
+            <div class="vi-metric-val @(Svc.Busy ? "warn" : "")">@(Svc.Busy ? "YES" : "—")</div>
+        </div>
+    </div>
+
+    <div class="vi-split wide" style="flex:1;min-height:0;">
+        <!-- Trigger form + job table -->
+        <div class="vi-stack" style="min-height:0;overflow-y:auto;">
+            <div class="vi-panel">
+                <div class="vi-panel-hdr"><span class="vi-panel-title">Trigger Ingest</span></div>
+                <div class="vi-panel-body vi-stack">
+                    <div class="vi-field">
+                        <label class="vi-label">Query</label>
+                        <input class="vi-input" placeholder="Topic or keyword to ingest…" @bind="Svc.Query" />
+                    </div>
+                    <div class="vi-field">
+                        <label class="vi-label">Sources (comma-separated)</label>
+                        <input class="vi-input" placeholder="newsapi, gdelt, reliefweb…" @bind="Svc.Sources" />
+                    </div>
+                    <div class="vi-row" style="gap:8px;">
+                        <button class="vi-btn primary" style="align-self:flex-start;"
+                                disabled="@(Svc.Busy || string.IsNullOrWhiteSpace(Svc.Query))"
+                                @onclick="Svc.TriggerAsync">
+                            @(Svc.Busy ? "Ingesting…" : "Trigger Ingest")
+                        </button>
+                        <button class="vi-btn" disabled="@Svc.Busy" @onclick="Svc.TriggerLiveAsync">Live Pull</button>
+                    </div>
+                </div>
+            </div>
+
+            @if (!Svc.JobRows().Any())
+            {
+                <div class="vi-empty">
+                    <span class="material-symbols-outlined">download</span>
+                    No ingest jobs yet
+                </div>
+            }
+            else
+            {
+                <div class="vi-panel" style="flex:1;min-height:0;">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Job Log</span>
+                        <span class="vi-chip">@Svc.JobRows().Count</span>
+                    </div>
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead>
+                                <tr>
+                                    <th>Job ID</th>
+                                    <th>Status</th>
+                                    <th>Sources</th>
+                                    <th>Count</th>
+                                    <th>Query</th>
+                                    <th>Started</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var j in Svc.JobRows())
+                                {
+                                    <tr>
+                                        <td class="vi-td-mono vi-faint">@j.JobId[..Math.Min(8, j.JobId.Length)]</td>
+                                        <td><span class="vi-chip @IngestService.JobCls(j.Status)">@j.Status.ToUpperInvariant()</span></td>
+                                        <td class="vi-td-mono">@j.Sources</td>
+                                        <td class="vi-td-mono">@j.Count</td>
+                                        <td class="vi-td-note vi-trunc" style="max-width:160px;">@(j.Query ?? "—")</td>
+                                        <td class="vi-td-mono vi-faint">@j.StartedAt</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <!-- Latest job detail -->
+        <div class="vi-stack">
+            @if (Svc.Job.HasValue)
+            {
+                var j = Svc.Job.Value;
+                var status  = GetStr(j, "status");
+                var jobId   = GetStr(j, "job_id", "id");
+                var count   = TryGetInt(j, "count", "events_ingested", "total");
+                var src     = GetStr(j, "sources", "source");
+                var error   = GetStr(j, "error", "detail", "message");
+                var action  = GetStr(j, "recommended_action", "action");
+                var started = GetStr(j, "started_at", "created_at");
+                var ended   = GetStr(j, "completed_at", "ended_at");
+
+                <div class="vi-panel soft">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Job Result</span>
+                        <span class="vi-chip @IngestService.JobCls(status)">@status.ToUpperInvariant()</span>
+                    </div>
+                    <div class="vi-panel-body vi-stack">
+                        <div class="vi-detail">
+                            <div class="vi-detail-row"><span class="vi-detail-key">Job ID</span><span class="vi-detail-val vi-mono" style="font-size:10px;">@jobId</span></div>
+                            <div class="vi-detail-row"><span class="vi-detail-key">Events ingested</span><span class="vi-detail-val @(count > 0 ? "ok" : "warn")">@count</span></div>
+                            <div class="vi-detail-row"><span class="vi-detail-key">Sources</span><span class="vi-detail-val vi-mono">@src</span></div>
+                            @if (started != "--")
+                            {
+                                <div class="vi-detail-row"><span class="vi-detail-key">Started</span><span class="vi-detail-val vi-mono vi-faint">@(started.Length > 16 ? started[..16].Replace("T"," ") : started)</span></div>
+                            }
+                            @if (ended != "--")
+                            {
+                                <div class="vi-detail-row"><span class="vi-detail-key">Completed</span><span class="vi-detail-val vi-mono vi-faint">@(ended.Length > 16 ? ended[..16].Replace("T"," ") : ended)</span></div>
+                            }
+                        </div>
+
+                        @if (error != "--" && !string.IsNullOrWhiteSpace(error))
+                        {
+                            <div class="vi-panel" style="background:rgba(248,113,113,.06);border-left:2px solid var(--err);padding:8px;">
+                                <div class="vi-td-mono err" style="font-size:11px;">@error</div>
+                            </div>
+                        }
+
+                        @if (action != "--" && !string.IsNullOrWhiteSpace(action))
+                        {
+                            <div class="vi-panel" style="background:rgba(96,165,250,.06);border-left:2px solid var(--accent);padding:8px;">
+                                <div class="vi-label" style="margin-bottom:3px;">Recommended Action</div>
+                                <div style="font-size:12px;color:var(--t2);">@action</div>
+                            </div>
+                        }
+
+                        @if (count == 0 && status is "complete" or "success" or "completed")
+                        {
+                            <div class="vi-faint" style="font-size:11px;">Zero events ingested — source may have returned no matching data for this query.</div>
+                        }
+                    </div>
+                </div>
+
+                <!-- Link to events if count > 0 -->
+                @if (count > 0)
+                {
+                    <div class="vi-row" style="gap:6px;">
+                        <a class="vi-btn sm" href="/live-events">View Events →</a>
+                        <a class="vi-btn sm" href="/signals">View Signals →</a>
+                    </div>
+                }
+            }
+            else
+            {
+                <div class="vi-panel soft">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Job Detail</span></div>
+                    <div class="vi-empty">Trigger an ingest job to see results.</div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+
+    static string GetStr(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+        {
+            if (!el.TryGetProperty(k, out var v)) continue;
+            if (v.ValueKind == JsonValueKind.String) return v.GetString() ?? "--";
+            return v.ToString();
+        }
+        return "--";
+    }
+
+    static int TryGetInt(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n))
+                return n;
+        return 0;
+    }
+}

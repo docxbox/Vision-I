@@ -1,0 +1,172 @@
+@page "/admin/stats"
+@layout AdminLayout
+@inject AdminStatsService Svc
+@using System.Text.Json
+@implements IDisposable
+
+<PageTitle>Stats | Vision-I Admin</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Admin / Stats</div>
+            <h1 class="vi-h1">System Statistics</h1>
+            <div class="vi-sub">INGESTION · SIGNALS · COVERAGE</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" @onclick="Svc.LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-split" style="flex:1;min-height:0;">
+
+        <!-- Ingestion stats -->
+        <div class="vi-stack">
+            @if (Svc.Stats.HasValue)
+            {
+                var s    = Svc.Stats.Value;
+                var rate = TryGetInt(s, "events_per_hour", "hourly_rate", "rate_per_hour");
+                var last = TryGetStr(s, "last_ingestion", "last_ingest", "last_run");
+
+                <!-- Key counts as metrics -->
+                <div class="vi-metrics" style="margin-bottom:12px;">
+                    @foreach (var kv in TopInts(s))
+                    {
+                        <div class="vi-metric">
+                            <div class="vi-metric-label">@kv.Key</div>
+                            <div class="vi-metric-val accent">@kv.Value</div>
+                        </div>
+                    }
+                </div>
+
+                <!-- Ingestion rate interpretation -->
+                @if (rate > 0 || !string.IsNullOrWhiteSpace(last))
+                {
+                    <div class="vi-panel soft">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Ingestion Rate</span></div>
+                        <div class="vi-panel-body vi-stack">
+                            @if (rate > 0)
+                            {
+                                <div class="vi-kv">
+                                    <span class="vi-kv-key">Events/hr</span>
+                                    <span class="vi-kv-val @(rate >= 10 ? "ok" : rate >= 1 ? "warn" : "err")">@rate</span>
+                                </div>
+                                <div class="vi-faint" style="font-size:11px;">
+                                    @(rate >= 10 ? "Healthy ingest rate." : rate >= 1 ? "Low rate — check source health." : "No recent ingestion — verify sources.")
+                                </div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(last))
+                            {
+                                <div class="vi-kv"><span class="vi-kv-key">Last ingest</span><span class="vi-kv-val vi-td-mono">@last[..Math.Min(last.Length, 19)]</span></div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                <!-- Source breakdown if present -->
+                @if (s.TryGetProperty("by_source", out var bySource) && bySource.ValueKind == JsonValueKind.Object)
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">By Source</span></div>
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead><tr><th>Source</th><th>Events</th></tr></thead>
+                                <tbody>
+                                    @foreach (var p in bySource.EnumerateObject().OrderByDescending(x => TryGetInt(x.Value, "count", "total", "events")))
+                                    {
+                                        var cnt = TryGetInt(p.Value, "count", "total", "events");
+                                        if (cnt == 0 && p.Value.ValueKind == JsonValueKind.Number) cnt = p.Value.GetInt32();
+                                        <tr>
+                                            <td class="vi-td-mono">@p.Name</td>
+                                            <td class="vi-td-mono accent">@cnt</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+            }
+            else
+            {
+                <div class="vi-empty">
+                    <span class="material-symbols-outlined">bar_chart</span>
+                    Ingestion stats unavailable.
+                </div>
+            }
+        </div>
+
+        <!-- Signal stats -->
+        <div class="vi-stack">
+            @if (Svc.Signals.HasValue)
+            {
+                var sig = Svc.Signals.Value;
+                var total       = TryGetInt(sig, "total");
+                var clustered   = TryGetInt(sig, "clustered");
+                var clusterCnt  = TryGetInt(sig, "cluster_count");
+                var srcCount    = TryGetInt(sig, "source_count");
+                var clusterPct  = total > 0 ? clustered * 100 / total : 0;
+
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Signal Intelligence</span></div>
+                    <div class="vi-panel-body vi-stack">
+                        <div class="vi-kv"><span class="vi-kv-key">Total signals</span><span class="vi-kv-val accent">@total</span></div>
+                        <div class="vi-kv"><span class="vi-kv-key">Clustered</span><span class="vi-kv-val ok">@clustered (@clusterPct%)</span></div>
+                        <div class="vi-kv"><span class="vi-kv-key">Clusters</span><span class="vi-kv-val">@clusterCnt</span></div>
+                        <div class="vi-kv"><span class="vi-kv-key">Sources</span><span class="vi-kv-val">@srcCount</span></div>
+
+                        <div class="vi-faint" style="font-size:11px;margin-top:4px;">
+                            @if (clusterPct >= 40)      { <span>Strong clustering — correlation engine active.</span> }
+                            else if (clusterPct >= 10)  { <span>Moderate clustering — some signals converging.</span> }
+                            else if (total > 0)         { <span>Low clustering — signals are sparse or diverse.</span> }
+                            else                        { <span>No signals — ingestion may be inactive.</span> }
+                        </div>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="vi-empty">
+                    <span class="material-symbols-outlined">hub</span>
+                    Signal stats unavailable.
+                </div>
+            }
+        </div>
+
+    </div>
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+
+    static IEnumerable<KeyValuePair<string, int>> TopInts(JsonElement el)
+    {
+        var candidates = new[] { "total_events", "events", "total", "alerts", "signals", "ingested", "processed" };
+        foreach (var k in candidates)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n))
+                yield return new(k.Replace("_", " "), n);
+    }
+
+    static int TryGetInt(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n))
+                return n;
+        return 0;
+    }
+
+    static string TryGetStr(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String)
+                return v.GetString() ?? "";
+        return "";
+    }
+}

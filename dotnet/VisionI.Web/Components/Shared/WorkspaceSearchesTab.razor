@@ -1,0 +1,144 @@
+@inject WorkspaceService WorkspaceSvc
+@inject NavigationManager Nav
+@inject ToastService Toast
+@using VisionI.Web.Models
+
+<div class="vi-stack" style="gap:12px;">
+    <!-- Add saved search -->
+    <div class="vi-panel">
+        <div class="vi-panel-hdr"><span class="vi-panel-title">Save a Search</span></div>
+        <div class="vi-panel-body">
+            <div class="vi-form-row">
+                <input class="vi-input" style="flex:1;" placeholder="e.g. Ukraine conflict, BTC volatility, Arctic shipping…"
+                       @bind="_newQuery" @bind:event="oninput"
+                       @onkeyup="OnKeyUp" />
+                <button class="vi-btn primary"
+                        disabled="@(_busy || string.IsNullOrWhiteSpace(_newQuery))"
+                        @onclick="AddAsync">
+                    @(_busy ? "Saving…" : "Save")
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Saved query list -->
+    @if (_loading)
+    {
+        <div class="vi-loading">LOADING SAVED SEARCHES</div>
+    }
+    else if (_queries.Count == 0)
+    {
+        <div class="vi-empty">
+            <span class="material-symbols-outlined">manage_search</span>
+            No saved searches yet — add one above
+        </div>
+    }
+    else
+    {
+        <div class="vi-panel">
+            <div class="vi-panel-hdr">
+                <span class="vi-panel-title">Saved Searches</span>
+                <span class="vi-chip">@_queries.Count</span>
+            </div>
+            <div class="vi-tbl-wrap">
+                <table class="vi-table">
+                    <thead>
+                        <tr>
+                            <th>Query</th>
+                            <th>Status</th>
+                            <th>Saved</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var q in _queries)
+                        {
+                            <tr>
+                                <td>
+                                    <button class="vi-td-title" style="background:none;border:none;color:var(--p);cursor:pointer;padding:0;text-align:left;"
+                                            @onclick="() => RunSearch(q.Query)">
+                                        @q.Query
+                                    </button>
+                                </td>
+                                <td>
+                                    <span class="vi-chip @(q.IsActive ? "ok" : "")">
+                                        @(q.IsActive ? "ACTIVE" : "INACTIVE")
+                                    </span>
+                                </td>
+                                <td class="vi-td-mono vi-faint">@FormatDate(q.CreatedAt)</td>
+                                <td>
+                                    <button class="vi-btn sm err" @onclick="() => RemoveAsync(q.Id)">Remove</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Slug { get; set; } = "";
+
+    bool _loading = true, _busy = false;
+    string _newQuery = "";
+    List<WorkspaceSavedQuery> _queries = new();
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var resp = await WorkspaceSvc.GetSavedQueriesAsync(Slug);
+            _queries = resp?.Queries ?? new();
+        }
+        catch (Exception ex) { Toast.ShowError($"Failed to load searches: {ex.Message}"); }
+        finally { _loading = false; }
+    }
+
+    async Task AddAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newQuery)) return;
+        _busy = true;
+        try
+        {
+            await WorkspaceSvc.AddSavedQueryAsync(Slug, _newQuery.Trim());
+            _newQuery = "";
+            await LoadAsync();
+            Toast.ShowSuccess("Search saved.");
+        }
+        catch (Exception ex) { Toast.ShowError($"Failed: {ex.Message}"); }
+        finally { _busy = false; }
+    }
+
+    async Task RemoveAsync(Guid id)
+    {
+        try
+        {
+            await WorkspaceSvc.RemoveSavedQueryAsync(Slug, id);
+            await LoadAsync();
+        }
+        catch (Exception ex) { Toast.ShowError($"Failed: {ex.Message}"); }
+    }
+
+    void RunSearch(string? query)
+    {
+        if (!string.IsNullOrEmpty(query))
+            Nav.NavigateTo($"/timeline?q={Uri.EscapeDataString(query)}");
+    }
+
+    async Task OnKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !_busy && !string.IsNullOrWhiteSpace(_newQuery))
+            await AddAsync();
+    }
+
+    static string FormatDate(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return "--";
+        return DateTime.TryParse(s, out var dt) ? dt.ToString("MMM dd, HH:mm") : s[..10];
+    }
+}

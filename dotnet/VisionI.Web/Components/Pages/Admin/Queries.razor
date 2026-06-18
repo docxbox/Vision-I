@@ -1,0 +1,148 @@
+@page "/admin/queries"
+@layout AdminLayout
+@inject AdminQueriesService Svc
+@implements IDisposable
+
+<PageTitle>Queries | Vision-I Admin</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Admin / Queries</div>
+            <h1 class="vi-h1">Tracked Queries</h1>
+            <div class="vi-sub">MONITORED TOPICS · SCHEDULED SEARCHES</div>
+        </div>
+        <div class="vi-page-actions">
+            <span class="vi-chip info">@Svc.Queries.Count queries</span>
+            <button class="vi-btn" @onclick="Svc.LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-split" style="flex:1;min-height:0;">
+        <div class="vi-stack" style="min-height:0;overflow-y:auto;">
+            <!-- Add form -->
+            <div class="vi-panel">
+                <div class="vi-panel-hdr"><span class="vi-panel-title">Add Query</span></div>
+                <div class="vi-panel-body vi-stack">
+                    <div class="vi-form-row">
+                        <input class="vi-input" style="flex:1;" placeholder="Topic or keyword to monitor…"
+                               @bind="Svc.QueryText" @onkeyup="OnKeyUp" />
+                        <button class="vi-btn primary" disabled="@(Svc.Busy || string.IsNullOrWhiteSpace(Svc.QueryText))"
+                                @onclick="Svc.AddAsync">
+                            @(Svc.Busy ? "Adding…" : "Add")
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Query list -->
+            @if (!Svc.Queries.Any())
+            {
+                <div class="vi-empty">
+                    <span class="material-symbols-outlined">manage_search</span>
+                    No tracked queries yet
+                </div>
+            }
+            else
+            {
+                <div class="vi-panel" style="flex:1;min-height:0;">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Tracked Queries</span>
+                        <span class="vi-chip">@Svc.Queries.Count</span>
+                    </div>
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead>
+                                <tr>
+                                    <th>Query</th>
+                                    <th>Owner</th>
+                                    <th>Active</th>
+                                    <th>Runs</th>
+                                    <th>Last Run</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var q in Svc.Queries)
+                                {
+                                    var isStale = q.IsActive && !string.IsNullOrWhiteSpace(q.LastRun) &&
+                                        DateTime.TryParse(q.LastRun, out var lr) && (DateTime.UtcNow - lr).TotalHours > 24;
+                                    var neverRun = q.IsActive && string.IsNullOrWhiteSpace(q.LastRun);
+                                    <tr>
+                                        <td><div class="vi-td-title">@(q.Query ?? "—")</div></td>
+                                        <td class="vi-td-mono vi-faint">@(q.CreatedBy ?? "—")</td>
+                                        <td><span class="vi-chip @(q.IsActive ? "ok" : "")">@(q.IsActive ? "YES" : "NO")</span></td>
+                                        <td class="vi-td-mono @(q.RunCount > 0 ? "ok" : "vi-faint")">@q.RunCount</td>
+                                        <td class="vi-td-mono @(isStale || neverRun ? "warn" : "vi-faint")">
+                                            @(neverRun ? "never" : AdminQueriesService.FormatTime(q.LastRun))
+                                        </td>
+                                        <td>
+                                            <button class="vi-btn sm err" @onclick="() => Svc.RemoveAsync(q.Id)">Remove</button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <div class="vi-stack">
+            <div class="vi-panel soft">
+                <div class="vi-panel-hdr"><span class="vi-panel-title">Coverage Summary</span></div>
+                <div class="vi-panel-body vi-stack">
+                    <div class="vi-metrics" style="gap:8px;">
+                        <div class="vi-metric">
+                            <div class="vi-metric-label">Active</div>
+                            <div class="vi-metric-val ok">@Svc.Queries.Count(q => q.IsActive)</div>
+                        </div>
+                        <div class="vi-metric">
+                            <div class="vi-metric-label">Inactive</div>
+                            <div class="vi-metric-val vi-faint">@Svc.Queries.Count(q => !q.IsActive)</div>
+                        </div>
+                        <div class="vi-metric">
+                            <div class="vi-metric-label">Total Runs</div>
+                            <div class="vi-metric-val accent">@Svc.Queries.Sum(q => q.RunCount)</div>
+                        </div>
+                    </div>
+                    @{
+                        var stale = Svc.Queries.Where(q => q.IsActive &&
+                            (string.IsNullOrWhiteSpace(q.LastRun) ||
+                             (DateTime.TryParse(q.LastRun, out var lr) && (DateTime.UtcNow - lr).TotalHours > 24))).ToList();
+                    }
+                    @if (stale.Any())
+                    {
+                        <div class="vi-panel" style="border-left:2px solid var(--warn);padding:8px;">
+                            <div class="vi-label warn" style="margin-bottom:3px;">Stale queries</div>
+                            <div class="vi-faint" style="font-size:11px;">@stale.Count active @(stale.Count == 1 ? "query has" : "queries have") not run in 24h. Check ingest scheduler.</div>
+                        </div>
+                    }
+                    <div style="font-size:12px;color:var(--tm);line-height:1.7;">
+                        Tracked queries are submitted to intelligence sources during scheduled ingest runs.
+                        Active queries are included in the next cycle.
+                    </div>
+                    <a class="vi-btn sm" href="/ingest">Trigger Ingest →</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    async Task OnKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !Svc.Busy && !string.IsNullOrWhiteSpace(Svc.QueryText))
+            await Svc.AddAsync();
+    }
+
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+}

@@ -1,0 +1,131 @@
+@page "/register"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@layout EmptyLayout
+@using Microsoft.AspNetCore.Components.Forms
+@using VisionI.Web.Models
+@using VisionI.Web.Services
+@inject AuthService AuthService
+@inject NavigationManager Navigation
+
+<PageTitle>Request Access | Vision-I</PageTitle>
+
+<div class="vi-auth-wall">
+    <div class="vi-auth-mark">VI</div>
+
+    <div class="vi-auth-card" style="max-width:480px;">
+        <div>
+            <div class="vi-kicker" style="text-align:center;margin-bottom:6px;">Provisioning</div>
+            <div class="vi-auth-title">Request operator access</div>
+            <div class="vi-auth-sub">Create a workspace account for analysts, researchers, and partner teams.</div>
+        </div>
+
+        <EditForm Model="@model" OnValidSubmit="Submit" FormName="register">
+            <DataAnnotationsValidator />
+
+            <div class="vi-stack" style="gap:10px;">
+                <div class="vi-form-row">
+                    <div class="vi-field" style="flex:1;">
+                        <label class="vi-label">Full Name</label>
+                        <InputText @bind-Value="model.DisplayName" class="vi-input" placeholder="Jane Smith" />
+                    </div>
+                    <div class="vi-field" style="flex:1;">
+                        <label class="vi-label">Organization</label>
+                        <InputText @bind-Value="model.Organization" class="vi-input" placeholder="Institute / NGO / newsroom" />
+                    </div>
+                </div>
+
+                <div class="vi-field">
+                    <label class="vi-label">Segment</label>
+                    <InputSelect @bind-Value="model.Segment" class="vi-select">
+                        <option value="">Select a segment</option>
+                        <option value="Academic">Academic</option>
+                        <option value="Journalist">Journalist</option>
+                        <option value="NGO">NGO / Humanitarian</option>
+                        <option value="Government">Government analyst</option>
+                    </InputSelect>
+                </div>
+
+                <div class="vi-field">
+                    <label class="vi-label">Email</label>
+                    <InputText @bind-Value="model.Email" class="vi-input" placeholder="analyst@vision-i.org" />
+                </div>
+
+                <div class="vi-field">
+                    <label class="vi-label">Password</label>
+                    <InputText type="password" @bind-Value="model.Password" class="vi-input" placeholder="Minimum 8 characters" />
+                    <div class="vi-row" style="gap:4px;margin-top:4px;">
+                        <span class="vi-chip @(Req("len") ? "ok" : "")">8+ chars</span>
+                        <span class="vi-chip @(Req("upp") ? "ok" : "")">uppercase</span>
+                        <span class="vi-chip @(Req("dig") ? "ok" : "")">number</span>
+                    </div>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(msg))
+            {
+                <div class="@(isErr ? "vi-auth-err" : "vi-auth-ok")" style="margin-top:10px;">@msg</div>
+            }
+
+            <div class="vi-stack" style="gap:6px;margin-top:14px;">
+                <button type="submit" class="vi-btn primary lg" style="width:100%;justify-content:center;"
+                        disabled="@processing">
+                    @(processing ? "PROVISIONING..." : "SUBMIT REQUEST")
+                </button>
+                <a class="vi-btn lg" style="width:100%;justify-content:center;text-align:center;"
+                   href="/login">BACK TO SIGN IN</a>
+            </div>
+        </EditForm>
+
+        <div class="vi-auth-foot">ROLE-GATED PLATFORM ACCESS</div>
+    </div>
+</div>
+
+@code {
+    private RegisterDto model = new();
+    private string msg = "";
+    private bool isErr;
+    private bool processing;
+
+    private bool Req(string rule)
+    {
+        var p = model.Password ?? "";
+        return rule switch
+        {
+            "len" => p.Length >= 8,
+            "upp" => p.Any(char.IsUpper),
+            "dig" => p.Any(char.IsDigit),
+            _ => false
+        };
+    }
+
+    private async Task Submit()
+    {
+        processing = true;
+        msg = "";
+        try
+        {
+            var error = await AuthService.RegisterAsync(model);
+            if (error == null)
+            {
+                isErr = false;
+                msg = "Account provisioned. Redirecting to sign in...";
+                await Task.Delay(1400);
+                Navigation.NavigateTo("/login");
+            }
+            else
+            {
+                isErr = true;
+                msg = error;
+            }
+        }
+        catch (Exception ex)
+        {
+            isErr = true;
+            msg = "Server error: " + ex.Message;
+        }
+        finally
+        {
+            processing = false;
+        }
+    }
+}

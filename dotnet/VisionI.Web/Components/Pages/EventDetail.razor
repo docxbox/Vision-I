@@ -1,0 +1,830 @@
+@page "/events/{EventId}"
+@inject EventDetailService Svc
+@inject NavigationManager Nav
+@implements IDisposable
+@inject WorkspaceService WorkspaceSvc
+@inject ApiService Api
+@inject AuthService Auth
+
+<PageTitle>@(Svc.Event?.Title ?? "Event Detail") | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">
+                @if (!string.IsNullOrWhiteSpace(FromWorkspace))
+                {
+                    <a href="/workspaces/@Uri.EscapeDataString(FromWorkspace)" style="color:var(--acc);text-decoration:none;font-weight:500;">← @(_fromWorkspaceTitle ?? FromWorkspace)</a>
+                    <span style="color:var(--tf);margin:0 6px;">/</span>
+                }
+                <a href="/live-events" style="color:var(--tf);text-decoration:none;">Detect / Events</a>
+                @if (!string.IsNullOrWhiteSpace(Svc.Event?.Source)) { <span> / @Svc.Event!.Source</span> }
+            </div>
+            <h1 class="vi-h1" style="max-width:820px;">
+                @if (Svc.Loading) { <span>Loading…</span> }
+                else if (!string.IsNullOrWhiteSpace(Svc.Error) && Svc.Event is null) { <span style="color:var(--err);">Event Unavailable</span> }
+                else { <span>@(Svc.Event?.Title ?? "Event")</span> }
+            </h1>
+            @if (Svc.Event is { } evh)
+            {
+                <div class="vi-sub" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px;">
+                    <span class="vi-chip @RiskCls(evh.RiskScore ?? 0)">RISK @((evh.RiskScore ?? 0).ToString("0.00"))</span>
+                    @if (!string.IsNullOrWhiteSpace(evh.EventType)) { <span class="vi-chip">@evh.EventType</span> }
+                    @if (!string.IsNullOrWhiteSpace(Svc.LocationLabel)) { <span class="vi-chip">@Svc.LocationLabel</span> }
+                    @if (evh.IsAnomaly) { <span class="vi-chip err">ANOMALY</span> }
+                    <span style="color:var(--tm);font-size:11px;">@evh.Timestamp</span>
+                </div>
+            }
+        </div>
+        <div class="vi-page-actions">
+            @{
+                var _loc = Svc.LocationLabel;
+                var _actor = Svc.Event?.Actors?.FirstOrDefault()?.Name;
+            }
+            @if (!string.IsNullOrWhiteSpace(Svc.Event?.Url))
+            {
+                <a class="vi-btn sm" href="@Svc.Event!.Url" target="_blank" rel="noopener noreferrer"
+                   style="display:flex;align-items:center;gap:4px;">
+                    <span class="material-symbols-outlined" style="font-size:13px;">open_in_new</span>
+                    View Source ↗
+                </a>
+            }
+            <button class="vi-btn sm" @onclick="OpenWsPicker" disabled="@(Svc.Event is null)">+ Workspace</button>
+            <button class="vi-btn sm @(_bookmarked ? "ok" : "")" @onclick="ToggleBookmarkAsync"
+                    title="@(_bookmarked ? "Remove bookmark" : "Bookmark this event")">
+                <span class="material-symbols-outlined" style="font-size:13px;">@(_bookmarked ? "bookmark" : "bookmark_border")</span>
+                @(_bookmarked ? "Bookmarked" : "Bookmark")
+            </button>
+            <a class="vi-btn sm" href="@(_loc is not null ? $"/map?region={Uri.EscapeDataString(_loc)}" : "/map")">@(_loc is not null ? $"Map ({_loc})" : "Map")</a>
+            <a class="vi-btn sm" href="@(_actor is not null ? $"/graph?actor={Uri.EscapeDataString(_actor)}" : "/graph")">@(_actor is not null ? $"Graph ({_actor})" : "Graph")</a>
+            <a class="vi-btn sm" href="@(Svc.Event?.EventId is { } eid ? $"/triage?event_id={Uri.EscapeDataString(eid)}" : "/triage")">Triage</a>
+            <a class="vi-btn sm primary" href="@(Svc.Event?.EventId is { } eid2 ? $"/operations?event={Uri.EscapeDataString(eid2)}" : "/operations")">Operations</a>
+            <button class="vi-btn sm" @onclick='() => Nav.NavigateTo("/live-events")'>← Events</button>
+        </div>
+    </div>
+
+    @if (Svc.Loading)
+    {
+        <div class="vi-loading">LOADING EVENT</div>
+    }
+    else if (!string.IsNullOrWhiteSpace(Svc.Error) && Svc.Event is null)
+    {
+        <div style="margin:32px 0;padding:28px;background:var(--s2);border:1px solid color-mix(in srgb,var(--err) 40%,transparent);border-radius:var(--r2);max-width:600px;">
+            <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:16px;">
+                <span class="material-symbols-outlined" style="color:var(--err);font-size:28px;flex-shrink:0;margin-top:2px;">error_outline</span>
+                <div>
+                    <div style="font-size:15px;font-weight:600;color:var(--t);margin-bottom:6px;">Event data unavailable</div>
+                    <div style="font-size:13px;color:var(--tm);line-height:1.65;">@Svc.Error</div>
+                </div>
+            </div>
+            <div style="font-size:12px;color:var(--tf);margin-bottom:16px;padding:10px 12px;background:var(--s1);border-radius:var(--r1);">
+                This is typically a temporary API timeout. Reload to retry, or return to the events list and reopen this event.
+                @if (!string.IsNullOrWhiteSpace(EventId))
+                {
+                    <span style="margin-left:8px;font-family:monospace;color:var(--tf);">ID: @EventId</span>
+                }
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button class="vi-btn primary sm" @onclick="Svc.ReloadAsync">Retry</button>
+                <a class="vi-btn sm" href="/live-events">← Back to Events</a>
+            </div>
+        </div>
+    }
+    else if (Svc.Event is { } ev)
+    {
+        @if (Svc.Degraded)
+        {
+            <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(251,191,36,0.10);border:1px solid color-mix(in srgb,var(--warn) 50%,transparent);border-radius:var(--r1);margin-bottom:10px;">
+                <span class="material-symbols-outlined" style="font-size:16px;color:var(--warn);flex-shrink:0;">warning</span>
+                <span style="font-size:12px;color:var(--warn);flex:1;">Intelligence enrichment unavailable — showing live feed data only. Signal, alert and narrative details may be incomplete.</span>
+                <button class="vi-btn sm" @onclick="Svc.ReloadAsync">Retry</button>
+            </div>
+        }
+        <div class="vi-metrics">
+            <div class="vi-metric">
+                <div class="vi-metric-label">Risk</div>
+                <div class="vi-metric-val @RiskCls(ev.RiskScore ?? 0)">@((ev.RiskScore ?? 0).ToString("0.00"))</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Confidence</div>
+                <div class="vi-metric-val">@((ev.ConfidenceScore ?? 0).ToString("0.00"))</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Actors</div>
+                <div class="vi-metric-val accent">@Svc.ActorCount</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Signals</div>
+                <div class="vi-metric-val">@Svc.RelatedSignalCount</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Alerts</div>
+                <div class="vi-metric-val @(Svc.LinkedAlertCount > 0 ? "err" : "")">@Svc.LinkedAlertCount</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Social</div>
+                <div class="vi-metric-val">@Svc.SocialCorrelationCount</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Narratives</div>
+                <div class="vi-metric-val">@Svc.NarrativeCount</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Decisions</div>
+                <div class="vi-metric-val">@Svc.SimilarDecisionCount</div>
+            </div>
+        </div>
+
+        <div class="vi-split wide" style="flex:1;min-height:0;align-items:flex-start;">
+            <!-- LEFT: Investigation data -->
+            <div class="vi-stack" style="flex:2;min-width:0;overflow-y:auto;">
+
+                @if (!string.IsNullOrWhiteSpace(ev.Description))
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Description</span></div>
+                        <div class="vi-panel-body">
+                            <div style="font-size:13px;color:var(--t2);line-height:1.65;">@ev.Description</div>
+                        </div>
+                    </div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(ev.Reasoning))
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Reasoning</span></div>
+                        <div class="vi-panel-body">
+                            <div style="font-size:12px;color:var(--tm);line-height:1.55;">@ev.Reasoning</div>
+                        </div>
+                    </div>
+                }
+
+                @if (ev.Actors.Any())
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Actors</span>
+                            <span class="vi-chip">@ev.Actors.Count</span>
+                        </div>
+                        <div class="vi-panel-body">
+                            <div class="vi-tags">
+                                @foreach (var actor in ev.Actors)
+                                {
+                                    <a class="vi-chip info" href="/entities">@(actor.Name ?? actor.Canonical ?? "Unknown")</a>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                }
+
+                @if (ev.Tags.Any())
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Tags</span></div>
+                        <div class="vi-panel-body">
+                            <div class="vi-tags">
+                                @foreach (var tag in ev.Tags) { <span class="vi-chip">@tag</span> }
+                            </div>
+                        </div>
+                    </div>
+                }
+
+                @if (Svc.Full?.Context?.RelatedEvents?.Any() == true)
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Related Events</span>
+                            <span class="vi-chip">@Svc.Full.Context.RelatedEvents.Count</span>
+                        </div>
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead><tr><th>Title</th><th>Source</th><th>Type</th><th>Time</th></tr></thead>
+                                <tbody>
+                                    @foreach (var rel in Svc.Full.Context.RelatedEvents.Take(10))
+                                    {
+                                        <tr style="cursor:pointer;"
+                                            @onclick='() => Nav.NavigateTo($"/events/{Uri.EscapeDataString(rel.EventId ?? "")}")'>
+                                            <td><div class="vi-td-title vi-trunc" style="max-width:260px;">@rel.Title</div></td>
+                                            <td class="vi-td-mono">@rel.Source</td>
+                                            <td><span class="vi-chip">@rel.EventType</span></td>
+                                            <td class="vi-td-mono vi-faint">@rel.Timestamp</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+
+                @if (Svc.RelatedSignals.Any())
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Linked Signals</span>
+                            <span class="vi-chip">@Svc.RelatedSignalCount</span>
+                            @if (Svc.ClusteredSignalCount > 0)
+                            {
+                                <span class="vi-chip ok">@Svc.ClusteredSignalCount clustered</span>
+                            }
+                        </div>
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead><tr><th>Title</th><th>Type</th><th>Source</th><th>Cluster</th><th>Conf.</th></tr></thead>
+                                <tbody>
+                                    @foreach (var sig in Svc.RelatedSignals.Take(15))
+                                    {
+                                        <tr>
+                                            <td><div class="vi-td-title vi-trunc" style="max-width:220px;">@sig.Title</div></td>
+                                            <td><span class="vi-chip">@sig.SignalType</span></td>
+                                            <td class="vi-td-mono">@sig.Source</td>
+                                            <td class="vi-td-mono vi-faint">@(string.IsNullOrWhiteSpace(sig.ClusterId) ? "—" : sig.ClusterId[..Math.Min(8, sig.ClusterId.Length)])</td>
+                                            <td class="vi-td-mono">@sig.Confidence.ToString("0.00")</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+
+                @if (Svc.Full?.Social?.Posts?.Any() == true)
+                {
+                    var _reddit  = Svc.Full.Social.Posts.Where(p => string.Equals(p.Source, "reddit",  StringComparison.OrdinalIgnoreCase)).ToList();
+                    var _youtube = Svc.Full.Social.Posts.Where(p => string.Equals(p.Source, "youtube", StringComparison.OrdinalIgnoreCase)).ToList();
+                    var _other   = Svc.Full.Social.Posts.Where(p => !string.Equals(p.Source, "reddit", StringComparison.OrdinalIgnoreCase) && !string.Equals(p.Source, "youtube", StringComparison.OrdinalIgnoreCase)).ToList();
+                    @if (_reddit.Any())
+                    {
+                        <div class="vi-panel">
+                            <div class="vi-panel-hdr">
+                                <span style="color:#ff6314;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Reddit</span>
+                                <span class="vi-chip warn">@_reddit.Count</span>
+                            </div>
+                            <div class="vi-stack" style="padding:12px;gap:8px;">
+                                @foreach (var post in _reddit.Take(6))
+                                {
+                                    <div style="background:rgba(255,99,20,0.06);border:1px solid rgba(255,99,20,0.18);border-radius:var(--r1);padding:10px 12px;">
+                                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:8px;">
+                                            <div style="font-size:10px;color:var(--tf);">
+                                                @(post.Author is { Length: > 0 } ? $"u/{post.Author}" : "reddit")
+                                                @if (!string.IsNullOrWhiteSpace(post.Timestamp)) { <span> · @post.Timestamp[..Math.Min(10,post.Timestamp.Length)]</span> }
+                                            </div>
+                                            @if (post.Sentiment is { } rs) { <span class="vi-chip @SentCls2(rs.Score)" style="font-size:9px;flex-shrink:0;">@rs.Label?.ToUpperInvariant() @rs.Score.ToString("0.00")</span> }
+                                        </div>
+                                        <div style="font-size:12px;color:var(--t2);line-height:1.5;">@(post.Title ?? post.Description ?? post.Body)</div>
+                                        @if (!string.IsNullOrWhiteSpace(post.Url))
+                                        {
+                                            <a href="@post.Url" target="_blank" rel="noopener noreferrer" style="font-size:10px;color:var(--acc);display:inline-block;margin-top:5px;">↗ reddit.com</a>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                    @if (_youtube.Any())
+                    {
+                        <div class="vi-panel">
+                            <div class="vi-panel-hdr">
+                                <span style="color:#ff0000;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">YouTube</span>
+                                <span class="vi-chip err">@_youtube.Count</span>
+                            </div>
+                            <div class="vi-stack" style="padding:12px;gap:8px;">
+                                @foreach (var post in _youtube.Take(6))
+                                {
+                                    <div style="background:rgba(255,0,0,0.06);border:1px solid rgba(255,0,0,0.18);border-radius:var(--r1);padding:10px 12px;">
+                                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:8px;">
+                                            <div style="font-size:10px;color:var(--tf);">
+                                                @(post.Author is { Length: > 0 } ? post.Author : "youtube")
+                                                @if (!string.IsNullOrWhiteSpace(post.Timestamp)) { <span> · @post.Timestamp[..Math.Min(10,post.Timestamp.Length)]</span> }
+                                            </div>
+                                            @if (post.Sentiment is { } ys) { <span class="vi-chip @SentCls2(ys.Score)" style="font-size:9px;flex-shrink:0;">@ys.Label?.ToUpperInvariant() @ys.Score.ToString("0.00")</span> }
+                                        </div>
+                                        <div style="font-size:12px;color:var(--t2);line-height:1.5;">@(post.Title ?? post.Description ?? post.Body)</div>
+                                        @if (!string.IsNullOrWhiteSpace(post.Url))
+                                        {
+                                            <a href="@post.Url" target="_blank" rel="noopener noreferrer" style="font-size:10px;color:var(--acc);display:inline-block;margin-top:5px;">↗ youtube.com</a>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                    @if (_other.Any())
+                    {
+                        <div class="vi-panel">
+                            <div class="vi-panel-hdr">
+                                <span class="vi-panel-title">Other Social</span>
+                                <span class="vi-chip">@_other.Count</span>
+                            </div>
+                            <div class="vi-stack" style="padding:12px;gap:8px;">
+                                @foreach (var post in _other.Take(4))
+                                {
+                                    <div style="background:var(--s2);border-radius:var(--r1);padding:10px 12px;">
+                                        <div style="font-size:10px;color:var(--tf);margin-bottom:4px;">
+                                            @post.Source
+                                            @if (!string.IsNullOrWhiteSpace(post.Author)) { <span> · @post.Author</span> }
+                                            @if (post.Sentiment is { } os) { <span class="vi-chip @SentCls2(os.Score)" style="font-size:9px;margin-left:4px;">@os.Label?.ToUpperInvariant() @os.Score.ToString("0.00")</span> }
+                                        </div>
+                                        <div style="font-size:12px;color:var(--t2);line-height:1.5;">@(post.Title ?? post.Description ?? post.Body)</div>
+                                        @if (!string.IsNullOrWhiteSpace(post.Url))
+                                        {
+                                            <a href="@post.Url" target="_blank" rel="noopener noreferrer" style="font-size:10px;color:var(--acc);display:inline-block;margin-top:5px;">↗ @(ExtractDomain2(post.Url) ?? "link")</a>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                }
+
+                @if (Svc.Full?.Context?.Alerts?.Any() == true)
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Linked Alerts</span>
+                            <span class="vi-chip err">@Svc.Full.Context.Alerts.Count</span>
+                        </div>
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead><tr><th>Title</th><th>Type</th><th>Severity</th><th>Entity</th></tr></thead>
+                                <tbody>
+                                    @foreach (var alert in Svc.Full.Context.Alerts)
+                                    {
+                                        <tr>
+                                            <td><div class="vi-td-title vi-trunc" style="max-width:220px;">@alert.Title</div></td>
+                                            <td><span class="vi-chip">@alert.AlertType</span></td>
+                                            <td><span class="vi-chip @SevCls(alert.Severity)">@alert.Severity.ToUpperInvariant()</span></td>
+                                            <td class="vi-td-mono">@(alert.Entity ?? "—")</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+
+                @if (Svc.Full?.Context?.Narratives?.Any() == true)
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Narratives</span>
+                            <span class="vi-chip">@Svc.Full.Context.Narratives.Count</span>
+                        </div>
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead><tr><th>Topic</th><th>Severity</th><th>Strength</th><th>Sources</th></tr></thead>
+                                <tbody>
+                                    @foreach (var n in Svc.Full.Context.Narratives.Take(8))
+                                    {
+                                        <tr>
+                                            <td><div class="vi-td-title vi-trunc" style="max-width:220px;">@n.Topic</div></td>
+                                            <td><span class="vi-chip @SevCls(n.Severity)">@n.Severity.ToUpperInvariant()</span></td>
+                                            <td class="vi-td-mono">@n.Strength.ToString("0.00")</td>
+                                            <td class="vi-td-mono">@n.SourceCount</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+
+                @if (Svc.HasSituation)
+                {
+                    var sit = Svc.Full!.Context!.Situation!;
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Case / Situation</span>
+                            <a class="vi-btn sm" href="/missions">View Cases</a>
+                        </div>
+                        <div class="vi-panel-body vi-stack">
+                            <div class="vi-detail">
+                                @if (!string.IsNullOrWhiteSpace(sit.Title))
+                                {
+                                    <div class="vi-detail-row"><span class="vi-detail-key">Title</span><span class="vi-detail-val">@sit.Title</span></div>
+                                }
+                                <div class="vi-detail-row"><span class="vi-detail-key">Priority</span><span class="vi-detail-val">@sit.PriorityScore.ToString("0.00")</span></div>
+                                <div class="vi-detail-row"><span class="vi-detail-key">Signals</span><span class="vi-detail-val">@sit.SignalCount</span></div>
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(sit.Summary))
+                            {
+                                <div style="font-size:12px;color:var(--tm);line-height:1.5;">@sit.Summary</div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                @if (Svc.Full?.Similar?.SimilarDecisions?.Any() == true)
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Similar Decisions</span>
+                            <span class="vi-chip">@Svc.Full.Similar.SimilarDecisions.Count</span>
+                            <a class="vi-btn sm" href="/decisions">All Decisions</a>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(Svc.Full.Similar.Insight))
+                        {
+                            <div style="padding:6px 12px 0;font-size:12px;color:var(--tm);">@Svc.Full.Similar.Insight</div>
+                        }
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead><tr><th>Decision</th><th>Analyst</th><th>Status</th><th>Outcome</th></tr></thead>
+                                <tbody>
+                                    @foreach (var d in Svc.Full.Similar.SimilarDecisions)
+                                    {
+                                        <tr>
+                                            <td><div class="vi-td-title vi-trunc" style="max-width:220px;">@d.CoaText</div></td>
+                                            <td class="vi-td-mono">@d.Analyst</td>
+                                            <td><span class="vi-chip">@d.Status</span></td>
+                                            <td class="vi-td-mono">@(d.Outcome ?? "—")</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+
+                @if (Svc.Full?.Explain is { } explain && !string.IsNullOrWhiteSpace(explain.Briefing))
+                {
+                    <div class="vi-panel soft">
+                        <div class="vi-panel-hdr">
+                            <span class="material-symbols-outlined" style="font-size:16px;color:var(--acc);">neurology</span>
+                            <span class="vi-panel-title">JARVIS Briefing</span>
+                        </div>
+                        <div class="vi-panel-body">
+                            <div style="font-size:12px;color:var(--t2);line-height:1.65;">@explain.Briefing</div>
+                        </div>
+                    </div>
+                }
+
+                @if (Svc.Full?.Recommend is { } rec && !string.IsNullOrWhiteSpace(rec.PrimaryRecommendation))
+                {
+                    <div class="vi-panel soft">
+                        <div class="vi-panel-hdr">
+                            <span class="material-symbols-outlined" style="font-size:16px;color:var(--acc);">neurology</span>
+                            <span class="vi-panel-title">JARVIS Recommendation</span>
+                            <span class="vi-chip">@rec.Confidence confidence</span>
+                        </div>
+                        <div class="vi-panel-body vi-stack">
+                            <div style="font-size:13px;color:var(--t2);line-height:1.6;">@rec.PrimaryRecommendation</div>
+                            @if (!string.IsNullOrWhiteSpace(rec.AiRecommendation) && rec.AiRecommendation != rec.PrimaryRecommendation)
+                            {
+                                <div style="font-size:12px;color:var(--tm);line-height:1.5;">@rec.AiRecommendation</div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(rec.HistoricalPrecedent))
+                            {
+                                <div style="font-size:11px;color:var(--tf);border-top:1px solid var(--bd);padding-top:8px;">Precedent: @rec.HistoricalPrecedent</div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                @if (Svc.PhysicalAssetCount > 0)
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Physical Assets</span>
+                            <span class="vi-chip">@Svc.PhysicalAssetCount</span>
+                        </div>
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead><tr><th>Name</th><th>Type</th><th>Callsign</th><th>Proximity</th></tr></thead>
+                                <tbody>
+                                    @foreach (var asset in (Svc.Full?.Intelligence?.PhysicalSignals?.Assets ?? []))
+                                    {
+                                        <tr>
+                                            <td><div class="vi-td-title">@(asset.Name ?? asset.Identifier ?? "—")</div></td>
+                                            <td><span class="vi-chip">@asset.AssetType</span></td>
+                                            <td class="vi-td-mono">@(asset.Callsign ?? "—")</td>
+                                            <td class="vi-td-mono">@asset.ProximityScore.ToString("0.00")</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+
+                @if (Svc.PlaybookCount > 0)
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Matched Playbooks</span>
+                            <span class="vi-chip">@Svc.PlaybookCount</span>
+                            <a class="vi-btn sm" href="/playbooks">All Playbooks</a>
+                        </div>
+                        <div class="vi-panel-body vi-stack" style="gap:10px;">
+                            @foreach (var pb in (Svc.Full?.Context?.Playbooks ?? []))
+                            {
+                                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+                                    <div>
+                                        <div style="font-size:13px;color:var(--t);font-weight:500;">@pb.Name</div>
+                                        <div style="font-size:11px;color:var(--tm);">@pb.Objective</div>
+                                    </div>
+                                    <span class="vi-chip @(pb.Status == "ready" ? "ok" : "")">@pb.Status</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <!-- RIGHT: Triage + Assessment -->
+            <div class="vi-stack" style="flex:1;min-width:260px;max-width:340px;">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Triage</span>
+                        @if (Svc.Triage is { } tr)
+                        {
+                            <span class="vi-chip @SevCls(tr.Priority)">@tr.Priority.ToUpperInvariant()</span>
+                        }
+                    </div>
+                    <div class="vi-panel-body vi-stack">
+                        <div class="vi-field">
+                            <label class="vi-label">Status</label>
+                            <select class="vi-select sm" @bind="Svc.TriageStatus">
+                                <option value="new">New</option>
+                                <option value="reviewing">Reviewing</option>
+                                <option value="escalated">Escalated</option>
+                                <option value="actioned">Actioned</option>
+                                <option value="dismissed">Dismissed</option>
+                            </select>
+                        </div>
+                        <div class="vi-field">
+                            <label class="vi-label">Priority</label>
+                            <select class="vi-select sm" @bind="Svc.TriagePriority">
+                                <option value="critical">Critical</option>
+                                <option value="high">High</option>
+                                <option value="medium">Medium</option>
+                                <option value="low">Low</option>
+                            </select>
+                        </div>
+                        <div class="vi-field">
+                            <label class="vi-label">Note</label>
+                            <input class="vi-input sm" placeholder="Analyst note…" @bind="Svc.TriageNote" />
+                        </div>
+                        <button class="vi-btn primary sm" style="align-self:flex-start;"
+                                disabled="@Svc.SavingTriage"
+                                @onclick="Svc.SaveTriageAsync">
+                            @(Svc.SavingTriage ? "Saving…" : "Save Triage")
+                        </button>
+                        @if (Svc.Triage is { } saved)
+                        {
+                            <div class="vi-detail" style="margin-top:4px;">
+                                <div class="vi-detail-row"><span class="vi-detail-key">Analyst</span><span class="vi-detail-val">@(saved.AnalystDisplayName ?? "—")</span></div>
+                                @if (!string.IsNullOrWhiteSpace(saved.CreatedAt))
+                                {
+                                    <div class="vi-detail-row"><span class="vi-detail-key">Created</span><span class="vi-detail-val vi-mono" style="font-size:10px;">@saved.CreatedAt</span></div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <div class="vi-panel soft">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Analyst Assessment</span></div>
+                    <div class="vi-panel-body vi-stack">
+                        <div class="vi-detail">
+                            <div class="vi-detail-row"><span class="vi-detail-key">Trajectory</span><span class="vi-detail-val">@Svc.Trajectory</span></div>
+                            <div class="vi-detail-row"><span class="vi-detail-key">Driver</span><span class="vi-detail-val">@Svc.PrimaryDriver</span></div>
+                            <div class="vi-detail-row"><span class="vi-detail-key">Action</span><span class="vi-detail-val">@Svc.RecommendedActionLabel</span></div>
+                            <div class="vi-detail-row"><span class="vi-detail-key">Corroboration</span><span class="vi-detail-val">@Svc.CorroborationScore.ToString("0.00")</span></div>
+                        </div>
+                        <div style="font-size:12px;color:var(--tm);line-height:1.55;border-top:1px solid var(--bd);padding-top:8px;">@Svc.AnalystAssessment</div>
+                    </div>
+                </div>
+
+                @if (Svc.HasEvidenceSummary)
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Evidence Summary</span></div>
+                        <div class="vi-panel-body">
+                            <div class="vi-detail">
+                                @if (Svc.RelatedEventCount > 0)
+                                {
+                                    <div class="vi-detail-row"><span class="vi-detail-key">Related events</span><span class="vi-detail-val">@Svc.RelatedEventCount</span></div>
+                                }
+                                @if (Svc.RelatedSignalCount > 0)
+                                {
+                                    <div class="vi-detail-row"><span class="vi-detail-key">Signals</span><span class="vi-detail-val">@Svc.RelatedSignalCount</span></div>
+                                }
+                                @if (Svc.ClusteredSignalCount > 0)
+                                {
+                                    <div class="vi-detail-row"><span class="vi-detail-key">Clustered signals</span><span class="vi-detail-val">@Svc.ClusteredSignalCount</span></div>
+                                }
+                                @if (Svc.LinkedAlertCount > 0)
+                                {
+                                    <div class="vi-detail-row"><span class="vi-detail-key">Alerts</span><span class="vi-detail-val">@Svc.LinkedAlertCount</span></div>
+                                }
+                                @if (Svc.SocialCorrelationCount > 0)
+                                {
+                                    <div class="vi-detail-row"><span class="vi-detail-key">Social posts</span><span class="vi-detail-val">@Svc.SocialCorrelationCount</span></div>
+                                }
+                                @if (Svc.NarrativeCount > 0)
+                                {
+                                    <div class="vi-detail-row"><span class="vi-detail-key">Narratives</span><span class="vi-detail-val">@Svc.NarrativeCount</span></div>
+                                }
+                                @if (Svc.PlaybookCount > 0)
+                                {
+                                    <div class="vi-detail-row"><span class="vi-detail-key">Playbooks</span><span class="vi-detail-val">@Svc.PlaybookCount</span></div>
+                                }
+                                @if (Svc.SimilarDecisionCount > 0)
+                                {
+                                    <div class="vi-detail-row"><span class="vi-detail-key">Similar decisions</span><span class="vi-detail-val">@Svc.SimilarDecisionCount</span></div>
+                                }
+                                @if (Svc.SourceFamilyCount > 0)
+                                {
+                                    <div class="vi-detail-row"><span class="vi-detail-key">Source families</span><span class="vi-detail-val">@Svc.SourceFamilyCount</span></div>
+                                }
+                                @if (Svc.PhysicalAssetCount > 0)
+                                {
+                                    <div class="vi-detail-row"><span class="vi-detail-key">Physical assets</span><span class="vi-detail-val">@Svc.PhysicalAssetCount</span></div>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+<!-- Workspace picker modal -->
+@if (_wsPickerOpen)
+{
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:300;display:flex;align-items:center;justify-content:center;"
+         @onclick='() => _wsPickerOpen = false'>
+        <div style="background:var(--s1);border:1px solid var(--bd);border-radius:var(--r2);padding:20px;width:460px;max-height:580px;overflow-y:auto;" @onclick:stopPropagation>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                <div style="font-size:14px;font-weight:600;">Add to Workspace</div>
+                <button class="vi-btn sm" @onclick='() => _wsPickerOpen = false'>✕</button>
+            </div>
+            <div style="font-size:11px;color:var(--tm);margin-bottom:14px;">Select a workspace to investigate this event:</div>
+            @if (_wsPickerLoading)
+            {
+                <div class="vi-loading" style="padding:20px;">LOADING</div>
+            }
+            else if (!_workspaces.Any())
+            {
+                <div class="vi-empty" style="padding:20px;">
+                    No workspaces.
+                    <a href="/workspaces/new" style="color:var(--acc);">Create one →</a>
+                </div>
+            }
+            else
+            {
+                <div style="display:flex;flex-direction:column;gap:7px;">
+                    @foreach (var ws in _workspaces)
+                    {
+                        <div class="vi-panel" style="padding:12px;cursor:pointer;"
+                             @onclick='() => GoToWorkspace(ws)'>
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <div>
+                                    <div style="font-size:13px;font-weight:600;">@ws.Title</div>
+                                    <div style="font-size:10px;color:var(--tf);">@ws.Slug</div>
+                                </div>
+                                <span class="vi-chip @(ws.Status == "active" ? "ok" : "")">@ws.Status</span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public string? EventId { get; set; }
+    [Parameter, SupplyParameterFromQuery(Name = "from")] public string? FromWorkspace { get; set; }
+
+    string? _fromWorkspaceTitle;
+    bool _bookmarked;
+    string? _bookmarkId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Task.WhenAll(
+            Svc.LoadAsync(EventId),
+            ResolveWorkspaceTitleAsync(),
+            CheckBookmarkAsync()
+        );
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var tasks = new List<Task>();
+        if (!string.Equals(Svc.LoadedEventId, EventId, StringComparison.OrdinalIgnoreCase))
+            tasks.Add(Svc.LoadAsync(EventId));
+        if (!string.IsNullOrWhiteSpace(FromWorkspace) && _fromWorkspaceTitle is null)
+            tasks.Add(ResolveWorkspaceTitleAsync());
+        if (tasks.Any()) await Task.WhenAll(tasks);
+    }
+
+    async Task ResolveWorkspaceTitleAsync()
+    {
+        if (string.IsNullOrWhiteSpace(FromWorkspace)) return;
+        try
+        {
+            var ws = await WorkspaceSvc.GetWorkspaceAsync(FromWorkspace);
+            _fromWorkspaceTitle = ws?.Title;
+        }
+        catch { }
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+
+    async Task CheckBookmarkAsync()
+    {
+        if (string.IsNullOrWhiteSpace(EventId) || Auth?.CurrentUser?.Id is null) return;
+        try
+        {
+            var resp = await Api.GetAsync<System.Text.Json.JsonElement?>(
+                $"api/bookmarks?user_id={Uri.EscapeDataString(Auth.CurrentUser.Id)}");
+            if (resp?.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var item in resp.Value.EnumerateArray())
+                {
+                    if (item.TryGetProperty("event_id", out var eid) && eid.GetString() == EventId)
+                    {
+                        _bookmarked = true;
+                        _bookmarkId = item.TryGetProperty("bookmark_id", out var bid) ? bid.GetString() : null;
+                        break;
+                    }
+                }
+            }
+        }
+        catch { }
+    }
+
+    async Task ToggleBookmarkAsync()
+    {
+        if (string.IsNullOrWhiteSpace(EventId) || Auth?.CurrentUser?.Id is null) return;
+        if (_bookmarked && _bookmarkId is not null)
+        {
+            await Api.DeleteAsync($"api/bookmarks/{_bookmarkId}?user_id={Uri.EscapeDataString(Auth.CurrentUser.Id)}");
+            _bookmarked = false; _bookmarkId = null;
+        }
+        else
+        {
+            var result = await Api.PostAsync<System.Text.Json.JsonElement?>(
+                $"api/bookmarks?user_id={Uri.EscapeDataString(Auth.CurrentUser.Id)}",
+                new { event_id = EventId });
+            if (result?.TryGetProperty("bookmark_id", out var bid) == true)
+            {
+                _bookmarkId = bid.GetString();
+                _bookmarked = true;
+            }
+        }
+        StateHasChanged();
+    }
+
+    // Workspace picker state
+    bool                    _wsPickerOpen;
+    bool                    _wsPickerLoading;
+    List<WorkspaceListItem> _workspaces = new();
+
+    void OpenWsPicker()
+    {
+        _wsPickerOpen = true;
+        _ = LoadWorkspacesAsync();
+    }
+
+    async Task LoadWorkspacesAsync()
+    {
+        if (_workspaces.Any()) return;
+        _wsPickerLoading = true;
+        StateHasChanged();
+        try
+        {
+            var resp = await WorkspaceSvc.GetWorkspacesAsync();
+            _workspaces = resp?.Items ?? new();
+        }
+        finally
+        {
+            _wsPickerLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    void GoToWorkspace(WorkspaceListItem ws)
+    {
+        _wsPickerOpen = false;
+        Nav.NavigateTo($"/workspaces/{Uri.EscapeDataString(ws.Slug)}");
+    }
+
+    static string RiskCls(double v) => v switch { > 0.7 => "err", > 0.4 => "warn", _ => "" };
+    static string SevCls(string s) => s.ToLowerInvariant() switch { "critical" => "err", "high" => "warn", _ => "" };
+    static string SentCls2(double v) => v > 0.6 ? "ok" : v < 0.4 ? "err" : "";
+    static string? ExtractDomain2(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            var h = uri.Host;
+            return h.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? h[4..] : h;
+        }
+        return null;
+    }
+}

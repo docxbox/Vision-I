@@ -1,0 +1,73 @@
+# Vision-I declarative playbook library.
+# Each entry is matched against an event/narrative context dict by trigger keys.
+
+- id: narrative-spike-containment
+  name: Narrative Spike Containment
+  objective: Contain rapid narrative amplification before it reaches viral threshold.
+  trigger:
+    narrative_strength_gte: 0.75
+    severity_in: [high, critical]
+  requires_approval: true
+  steps:
+    - action: notify
+      target: duty_analyst
+      message: "Narrative spike detected — review required"
+    - action: create_alert
+      alert_type: narrative
+      severity: high
+      title: "Narrative spike threshold exceeded"
+    - action: escalate
+      to: watch_floor
+      reason: "narrative_strength >= 0.75"
+
+- id: physical-anomaly-response
+  name: Physical Anomaly Response
+  objective: Cross-reference physical signal anomalies (aircraft, vessels, seismic) with the digital narrative layer.
+  trigger:
+    event_type_in: [transport, disaster]
+    priority_score_gte: 0.7
+  requires_approval: false
+  steps:
+    - action: trigger_ingest
+      source: gdelt
+      query: "{title}"
+    - action: trigger_ingest
+      source: socials
+      query: "{title}"
+    - action: notify
+      target: geoint_cell
+      message: "Physical anomaly correlated with intelligence sweep"
+
+- id: market-shock-watch
+  name: Market Shock Watch
+  objective: Mark market-moving events for analyst follow-up and decision recording.
+  trigger:
+    event_type_eq: market
+    risk_score_gte: 0.6
+  requires_approval: false
+  steps:
+    - action: create_alert
+      alert_type: market
+      severity: medium
+      title: "Market shock detected"
+    - action: record_decision
+      coa_text: "Monitor exposure for 60 minutes"
+      analyst: playbook-engine
+
+- id: disinfo-coordination
+  name: Disinformation Coordination Sweep
+  objective: Probe for coordinated inauthentic behavior across social channels.
+  trigger:
+    signal_type_eq: amplification
+    confidence_gte: 0.65
+  requires_approval: true
+  steps:
+    - action: trigger_ingest
+      source: twitter
+      query: "{topic}"
+    - action: trigger_ingest
+      source: reddit
+      query: "{topic}"
+    - action: escalate
+      to: counter_disinfo
+      reason: "coordinated amplification suspected"

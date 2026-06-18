@@ -1,0 +1,274 @@
+@page "/correlation"
+@inject SignalsService Svc
+@implements IDisposable
+
+<PageTitle>Correlation | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Analyse / Signals</div>
+            <h1 class="vi-h1">Correlation Explorer</h1>
+            <div class="vi-sub">SIGNAL CLUSTERS · SOURCE FAMILIES · ACTOR OVERLAP</div>
+        </div>
+        <div class="vi-page-actions">
+            <a class="vi-btn sm" href="/signals">Signals</a>
+            <button class="vi-btn" disabled="@Svc.Loading" @onclick="RefreshAsync">Refresh</button>
+        </div>
+    </div>
+
+    @if (Svc.Loading)
+    {
+        <div class="vi-loading">LOADING CORRELATION DATA</div>
+    }
+    else
+    {
+        @if (Svc.Correlation is { } corr)
+        {
+            <div class="vi-metrics">
+                <div class="vi-metric">
+                    <div class="vi-metric-label">Total Signals</div>
+                    <div class="vi-metric-val accent">@corr.TotalSignals</div>
+                </div>
+                <div class="vi-metric">
+                    <div class="vi-metric-label">Clusters</div>
+                    <div class="vi-metric-val">@corr.ClusterCount</div>
+                </div>
+                <div class="vi-metric">
+                    <div class="vi-metric-label">Clustered</div>
+                    <div class="vi-metric-val ok">@corr.ClusteredSignals</div>
+                </div>
+                <div class="vi-metric">
+                    <div class="vi-metric-label">Avg Cluster Size</div>
+                    <div class="vi-metric-val">@corr.AvgClusterSize.ToString("0.0")</div>
+                </div>
+                @if (Svc.ConfidenceDistribution is { } cd)
+                {
+                    <div class="vi-metric">
+                        <div class="vi-metric-label">High Conf.</div>
+                        <div class="vi-metric-val ok">@cd.High</div>
+                    </div>
+                    <div class="vi-metric">
+                        <div class="vi-metric-label">Medium Conf.</div>
+                        <div class="vi-metric-val warn">@cd.Medium</div>
+                    </div>
+                    <div class="vi-metric">
+                        <div class="vi-metric-label">Low Conf.</div>
+                        <div class="vi-metric-val">@cd.Low</div>
+                    </div>
+                    <div class="vi-metric">
+                        <div class="vi-metric-label">Unscored</div>
+                        <div class="vi-metric-val">@cd.Unscored</div>
+                    </div>
+                }
+            </div>
+        }
+
+        <div class="vi-split wide" style="flex:1;min-height:0;">
+            <!-- Cluster table -->
+            <div class="vi-panel" style="flex:2;min-width:0;">
+                <div class="vi-panel-hdr">
+                    <span class="vi-panel-title">Signal Clusters</span>
+                    @if (_clusters.Any()) { <span class="vi-chip">@_clusters.Count</span> }
+                    @if (Svc.Clusters?.Total is { } t and > 0) { <span class="vi-chip info">@t total</span> }
+                </div>
+                @if (Svc.Loading) { /* handled above */ }
+                else if (!_clusters.Any() && Svc.Clusters is null)
+                {
+                    <div class="vi-empty">
+                        <span class="material-symbols-outlined">hub</span>
+                        Cluster data unavailable — correlation engine may be warming up or Redis cache is cold.
+                        <div style="margin-top:8px;"><button class="vi-btn sm" @onclick="RefreshAsync">Retry</button></div>
+                    </div>
+                }
+                else if (_clusters.Any())
+                {
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead>
+                                <tr>
+                                    <th>Cluster</th>
+                                    <th>Signals</th>
+                                    <th>Sources</th>
+                                    <th>Score</th>
+                                    <th>Span (h)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var c in _clusters)
+                                {
+                                    <tr class="@(_selected?.ClusterId == c.ClusterId ? "sel" : "")"
+                                        style="cursor:pointer;"
+                                        @onclick="() => _selected = c">
+                                        <td>
+                                            <div class="vi-td-title vi-trunc" style="max-width:280px;">
+                                                @(c.RepresentativeTitle ?? c.ClusterId)
+                                            </div>
+                                            @if (c.SharedActors.Any())
+                                            {
+                                                <div class="vi-td-note vi-trunc">@string.Join(", ", c.SharedActors.Take(3))</div>
+                                            }
+                                        </td>
+                                        <td class="vi-td-mono">@c.SignalCount</td>
+                                        <td>
+                                            <div style="display:flex;flex-wrap:wrap;gap:3px;">
+                                                @foreach (var s in c.Sources.Take(3))
+                                                {
+                                                    <span class="vi-chip" style="font-size:10px;">@s</span>
+                                                }
+                                                @if (c.Sources.Count > 3)
+                                                {
+                                                    <span class="vi-chip" style="font-size:10px;">+@(c.Sources.Count - 3)</span>
+                                                }
+                                            </div>
+                                        </td>
+                                        <td><span class="vi-chip @ScoreCls(c.CompositeScore)">@c.CompositeScore.ToString("0.00")</span></td>
+                                        <td class="vi-td-mono vi-faint">@c.TimeSpanHours.ToString("0.0")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                else
+                {
+                    <div class="vi-empty">
+                        <span class="material-symbols-outlined">hub</span>
+                        No cluster data. Click Refresh to load.
+                    </div>
+                }
+            </div>
+
+            <!-- Detail + confidence -->
+            <div class="vi-stack" style="flex:1;min-width:240px;">
+                @if (_selected is { } sel)
+                {
+                    <div class="vi-panel soft">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Cluster Detail</span></div>
+                        <div class="vi-panel-body vi-stack">
+                            @if (!string.IsNullOrWhiteSpace(sel.RepresentativeTitle))
+                            {
+                                <div style="font-size:13px;color:var(--t);font-weight:600;line-height:1.4;">@sel.RepresentativeTitle</div>
+                            }
+                            <div class="vi-detail">
+                                <div class="vi-detail-row">
+                                    <span class="vi-detail-key">Cluster ID</span>
+                                    <span class="vi-detail-val vi-mono" style="font-size:10px;word-break:break-all;">@sel.ClusterId</span>
+                                </div>
+                                <div class="vi-detail-row"><span class="vi-detail-key">Signals</span><span class="vi-detail-val">@sel.SignalCount</span></div>
+                                <div class="vi-detail-row"><span class="vi-detail-key">Score</span><span class="vi-detail-val">@sel.CompositeScore.ToString("0.000")</span></div>
+                                <div class="vi-detail-row"><span class="vi-detail-key">Time span</span><span class="vi-detail-val">@sel.TimeSpanHours.ToString("0.0") h</span></div>
+                            </div>
+
+                            @if (sel.Sources.Any())
+                            {
+                                <div>
+                                    <div class="vi-label">Sources</div>
+                                    <div class="vi-tags">
+                                        @foreach (var s in sel.Sources) { <span class="vi-chip">@s</span> }
+                                    </div>
+                                </div>
+                            }
+
+                            @if (sel.SharedActors.Any())
+                            {
+                                <div>
+                                    <div class="vi-label">Shared Actors</div>
+                                    <div class="vi-tags">
+                                        @foreach (var a in sel.SharedActors)
+                                        {
+                                            <a class="vi-chip info" href="/entities">@a</a>
+                                        }
+                                    </div>
+                                </div>
+                            }
+
+                            <div style="display:flex;gap:6px;margin-top:4px;">
+                                <a class="vi-btn sm" href="/signals">Signals</a>
+                                <a class="vi-btn sm" href="/graph">Graph</a>
+                                <a class="vi-btn sm" href="/triage">Triage</a>
+                            </div>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="vi-panel soft">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Cluster Detail</span></div>
+                        <div class="vi-empty">Select a cluster to inspect</div>
+                    </div>
+                }
+
+                @if (Svc.ConfidenceDistribution is { Total: > 0 } cdd)
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Confidence Distribution</span></div>
+                        <div class="vi-panel-body vi-stack">
+                            <div>
+                                <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px;">
+                                    <span style="color:var(--t2);">High</span><span style="color:var(--tf);">@cdd.High</span>
+                                </div>
+                                <div style="height:4px;background:var(--s2);border-radius:2px;">
+                                    <div style="height:4px;border-radius:2px;width:@(Pct(cdd.High,cdd.Total))%;background:#34d399;"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px;">
+                                    <span style="color:var(--t2);">Medium</span><span style="color:var(--tf);">@cdd.Medium</span>
+                                </div>
+                                <div style="height:4px;background:var(--s2);border-radius:2px;">
+                                    <div style="height:4px;border-radius:2px;width:@(Pct(cdd.Medium,cdd.Total))%;background:#fbbf24;"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px;">
+                                    <span style="color:var(--t2);">Low</span><span style="color:var(--tf);">@cdd.Low</span>
+                                </div>
+                                <div style="height:4px;background:var(--s2);border-radius:2px;">
+                                    <div style="height:4px;border-radius:2px;width:@(Pct(cdd.Low,cdd.Total))%;background:#f87171;"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px;">
+                                    <span style="color:var(--t2);">Unscored</span><span style="color:var(--tf);">@cdd.Unscored</span>
+                                </div>
+                                <div style="height:4px;background:var(--s2);border-radius:2px;">
+                                    <div style="height:4px;border-radius:2px;width:@(Pct(cdd.Unscored,cdd.Total))%;background:#52525b;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    SignalClusterDto? _selected;
+
+    List<SignalClusterDto> _clusters =>
+        Svc.Clusters?.Clusters.Count > 0
+            ? Svc.Clusters.Clusters
+            : Svc.Correlation?.TopClusters ?? new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.SwitchTabAsync("stats");
+        await Svc.LoadClustersAsync();
+    }
+
+    async Task RefreshAsync()
+    {
+        _selected = null;
+        await Svc.LoadStatsAsync();
+        await Svc.LoadClustersAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+
+    static string ScoreCls(double v) => v switch { > 0.7 => "err", > 0.4 => "warn", _ => "" };
+    static int Pct(int n, int total) => total > 0 ? n * 100 / total : 0;
+}

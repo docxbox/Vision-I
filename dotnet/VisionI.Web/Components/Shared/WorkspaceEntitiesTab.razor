@@ -1,0 +1,97 @@
+@inject NavigationManager Nav
+
+@if (Entities is null || !Entities.EntityItems.Any())
+{
+    <EmptyState Icon="group_off" Message="No entity data available for this workspace." />
+}
+else
+{
+    var entSorted = Entities.EntityItems.OrderByDescending(e => e.Count).ToList();
+    var byEvents  = Entities.EntityItems.OrderByDescending(e => e.EventCount).FirstOrDefault();
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px;">
+        @RenderFeaturedEntity("Most Mentioned", entSorted.FirstOrDefault(), "trending_up")
+        @RenderFeaturedEntity("Most Events",    byEvents, "event")
+        @RenderFeaturedEntity("Second Actor",   entSorted.Skip(1).FirstOrDefault(), "north_east")
+    </div>
+
+    <div class="vi-panel">
+        <div class="vi-panel-hdr">
+            <span class="vi-panel-title">All Entities</span>
+            <span class="vi-chip">@Entities.EntityCount</span>
+        </div>
+        <div class="vi-tbl-wrap">
+            <table class="vi-table">
+                <thead><tr><th>Entity</th><th>Type</th><th>Mentions</th><th>Events</th></tr></thead>
+                <tbody>
+                    @foreach (var ent in entSorted)
+                    {
+                        var eKey = Uri.EscapeDataString(ent.Name.ToLowerInvariant().Replace(" ", "-"));
+                        <tr style="cursor:pointer;" @onclick='() => Nav.NavigateTo($"/entities/{eKey}")'>
+                            <td><div style="font-size:12px;font-weight:500;color:var(--acc);">@ent.Name</div></td>
+                            <td>
+                                @if (!string.IsNullOrWhiteSpace(ent.EntityType)) { <span class="vi-chip">@ent.EntityType</span> }
+                                else { <span style="color:var(--tf);">—</span> }
+                            </td>
+                            <td style="font-size:12px;">@ent.Count</td>
+                            <td style="font-size:12px;">@ent.EventCount</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    @if (Correlation?.Narratives?.Any() == true)
+    {
+        <div class="vi-panel" style="margin-top:14px;">
+            <div class="vi-panel-hdr">
+                <span class="vi-panel-title">Relationship Highlights</span>
+                <button class="vi-btn sm" @onclick='() => OnNavigateTab.InvokeAsync("Correlation")'>Full →</button>
+            </div>
+            <div class="vi-tbl-wrap">
+                <table class="vi-table">
+                    <thead><tr><th>Source</th><th>Relation</th><th>Target</th></tr></thead>
+                    <tbody>
+                        @foreach (var n in Correlation.Narratives.Take(5))
+                        {
+                            <tr>
+                                <td style="font-size:12px;">@n.Source</td>
+                                <td><span class="vi-chip">@n.Rel</span></td>
+                                <td style="font-size:12px;">@n.Target</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public WorkspaceEntities?    Entities      { get; set; }
+    [Parameter] public WorkspaceCorrelation? Correlation   { get; set; }
+    [Parameter] public EventCallback<string> OnNavigateTab { get; set; }
+
+    RenderFragment RenderFeaturedEntity(string label, WorkspaceEntityItem? ent, string icon) => __builder =>
+    {
+        __builder.OpenElement(0, "div");
+        __builder.AddAttribute(1, "class", "vi-panel");
+        __builder.AddAttribute(2, "style", "padding:14px;");
+        int s = 3;
+        __builder.AddMarkupContent(s++, $"<div class=\"vi-kicker\" style=\"margin-bottom:8px;\">{label}</div>");
+        if (ent is null)
+            __builder.AddMarkupContent(s++, "<div class=\"vi-empty\" style=\"padding:8px 0;font-size:12px;\">No data</div>");
+        else
+            __builder.AddMarkupContent(s++,
+                $"<div style=\"display:flex;align-items:center;gap:8px;\">" +
+                $"<span class=\"material-symbols-outlined\" style=\"font-size:18px;color:var(--acc);\">{icon}</span>" +
+                $"<div><div style=\"font-size:14px;font-weight:600;\">{System.Net.WebUtility.HtmlEncode(ent.Name)}</div>" +
+                (!string.IsNullOrWhiteSpace(ent.EntityType) ? $"<div style=\"font-size:10px;color:var(--tf);\">{System.Net.WebUtility.HtmlEncode(ent.EntityType)}</div>" : "") +
+                $"</div></div>" +
+                $"<div style=\"display:flex;gap:12px;margin-top:8px;font-size:11px;\">" +
+                $"<span><span style=\"color:var(--tm);\">Mentions</span> <strong>{ent.Count}</strong></span>" +
+                $"<span><span style=\"color:var(--tm);\">Events</span> <strong>{ent.EventCount}</strong></span></div>");
+        __builder.CloseElement();
+    };
+}

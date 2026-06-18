@@ -1,0 +1,131 @@
+@inject NavigationManager Nav
+@if (Correlation is null || (Correlation.Narratives?.Count == 0 && Correlation.SignalClusters?.Count == 0 && Correlation.Events?.Count == 0))
+{
+    <EmptyState Icon="hub" Message="No strong actor relationships identified." />
+}
+else
+{
+    var corrBullets = BuildCorrelationSummary();
+
+    @if (corrBullets.Any())
+    {
+        <div class="vi-panel" style="margin-bottom:16px;border-left:3px solid var(--accent);">
+            <div class="vi-panel-hdr">
+                <span class="vi-panel-title">Correlation Summary</span>
+                <span class="vi-chip">@Correlation.NarrativeCount links</span>
+            </div>
+            <div class="vi-panel-body vi-stack" style="gap:6px;">
+                @foreach (var b in corrBullets)
+                {
+                    <div style="display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--t2);">
+                        <span class="material-symbols-outlined" style="font-size:14px;color:var(--acc);flex-shrink:0;margin-top:1px;">link</span>
+                        @b
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    @if (Correlation.SignalClusters?.Any() == true)
+    {
+        <div class="vi-panel" style="margin-bottom:14px;">
+            <div class="vi-panel-hdr">
+                <span class="vi-panel-title">Signal Clusters</span>
+                <span class="vi-chip">@Correlation.ClusterCount clusters</span>
+            </div>
+            <div class="vi-panel-body">
+                <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                    @foreach (var c in Correlation.SignalClusters.OrderByDescending(x => x.Count))
+                    {
+                        var iCls = c.Count >= 5 ? "err" : c.Count >= 3 ? "warn" : "info";
+                        <span class="vi-chip @iCls">@c.Tag <strong>@c.Count</strong></span>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (Correlation.Narratives?.Any() == true)
+    {
+        <div class="vi-panel" style="margin-bottom:14px;">
+            <div class="vi-panel-hdr">
+                <span class="vi-panel-title">Actor Relationships</span>
+                <span class="vi-chip">@Correlation.Narratives.Count links</span>
+            </div>
+            <div class="vi-tbl-wrap">
+                <table class="vi-table">
+                    <thead><tr><th>Source</th><th>Relation</th><th>Target</th></tr></thead>
+                    <tbody>
+                        @foreach (var n in Correlation.Narratives)
+                        {
+                            <tr>
+                                <td style="font-size:12px;">@n.Source</td>
+                                <td><span class="vi-chip">@n.Rel</span></td>
+                                <td style="font-size:12px;">@n.Target</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    @if (Correlation.Events?.Any() == true)
+    {
+        <div class="vi-panel">
+            <div class="vi-panel-hdr">
+                <span class="vi-panel-title">Connected Events</span>
+                <span class="vi-chip">@Correlation.Events.Count from graph</span>
+            </div>
+            <div class="vi-tbl-wrap">
+                <table class="vi-table">
+                    <thead><tr><th>Event</th><th>Source</th><th>Type</th><th>Linked Actor</th><th>When</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach (var e in Correlation.Events)
+                        {
+                            var _eid = Uri.EscapeDataString(e.Id);
+                            <tr style="cursor:pointer;" @onclick='() => Nav.NavigateTo($"/events/{_eid}")'>
+                                <td style="font-size:12px;max-width:320px;">
+                                    <a href="@($"/events/{_eid}")" style="color:var(--acc);text-decoration:none;">@e.Title</a>
+                                </td>
+                                <td>@if (!string.IsNullOrEmpty(e.Source)) { <span class="vi-chip info">@e.Source</span> }</td>
+                                <td style="font-size:12px;color:var(--t2);">@e.EventType</td>
+                                <td style="font-size:12px;">@e.Actor</td>
+                                <td style="font-size:12px;color:var(--t2);white-space:nowrap;">@FormatWhen(e.Timestamp)</td>
+                                <td style="white-space:nowrap;" @onclick:stopPropagation="true">
+                                    <a class="vi-chip" href="@($"/events/{_eid}")">Open →</a>
+                                    <a class="vi-chip" href="@($"/explore/event/{_eid}")" title="Open in graph explorer">Graph</a>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public WorkspaceCorrelation? Correlation { get; set; }
+
+    List<string> BuildCorrelationSummary()
+    {
+        var b = new List<string>();
+        if (Correlation is null) return b;
+        var top = Correlation.SignalClusters?.OrderByDescending(c => c.Count).FirstOrDefault();
+        if (top is not null) b.Add($"Strongest signal cluster: \"{top.Tag}\" with {top.Count} signals.");
+        var link = Correlation.Narratives?.FirstOrDefault();
+        if (link is not null) b.Add($"Primary actor link: {link.Source} {link.Rel} {link.Target}.");
+        if (Correlation.NarrativeCount > 3)
+            b.Add($"{Correlation.NarrativeCount} narrative links across {Correlation.ClusterCount} clusters.");
+        if (Correlation.Events?.Any() == true)
+            b.Add($"{Correlation.Events.Count} connected events traced through the knowledge graph.");
+        return b;
+    }
+
+    static string FormatWhen(string? ts)
+    {
+        if (string.IsNullOrEmpty(ts)) return "";
+        return DateTime.TryParse(ts, out var dt) ? dt.ToString("MMM d, HH:mm") : ts;
+    }
+}

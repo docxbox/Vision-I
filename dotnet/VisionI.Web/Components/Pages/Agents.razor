@@ -1,0 +1,357 @@
+@page "/agents"
+@layout AnalystLayout
+@inject MissionsService Svc
+@inject ApiService Api
+@inject ToastService Toast
+@implements IDisposable
+
+<PageTitle>Agents | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Command / Agents</div>
+            <h1 class="vi-h1">Agent Dispatch</h1>
+            <div class="vi-sub">AI MISSIONS · AUTONOMOUS ANALYSIS · RESULTS</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" disabled="@Svc.Busy" @onclick="Svc.LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Total Missions</div>
+            <div class="vi-metric-val accent">@Svc.MissionRows().Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Running</div>
+            <div class="vi-metric-val warn">@Svc.MissionRows().Count(m => m.Status == "running")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Completed</div>
+            <div class="vi-metric-val ok">@Svc.MissionRows().Count(m => m.Status == "completed")</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Agent Busy</div>
+            <div class="vi-metric-val @(Svc.Busy ? "warn" : "")">@(Svc.Busy ? "YES" : "—")</div>
+        </div>
+        @if (_llm is { } llm)
+        {
+            <div class="vi-metric">
+                <div class="vi-metric-label">LLM Provider</div>
+                <div class="vi-metric-val">@(llm.Provider ?? "—")</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">LLM Model</div>
+                <div class="vi-metric-val" style="font-size:10px;">@(llm.Model ?? "—")</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">LLM Ready</div>
+                <div class="vi-metric-val @(llm.Available ? "ok" : "err")">@(llm.Available ? "YES" : "NO")</div>
+            </div>
+        }
+    </div>
+
+    <div class="vi-split wide" style="flex:1;min-height:0;">
+        <!-- Dispatch form + mission log -->
+        <div class="vi-stack" style="min-height:0;overflow-y:auto;">
+            <div class="vi-panel">
+                <div class="vi-panel-hdr"><span class="vi-panel-title">Dispatch Mission</span></div>
+                <div class="vi-panel-body vi-stack">
+                    <div class="vi-field">
+                        <label class="vi-label">Objective</label>
+                        <input class="vi-input" placeholder="What should the agent investigate?" @bind="Svc.Objective" />
+                    </div>
+                    <div class="vi-field">
+                        <label class="vi-label">Context</label>
+                        <input class="vi-input" placeholder="Additional context or constraints…" @bind="Svc.Context" />
+                    </div>
+                    <button class="vi-btn primary" style="align-self:flex-start;"
+                            disabled="@(Svc.Busy || string.IsNullOrWhiteSpace(Svc.Objective))"
+                            @onclick="Svc.StartAsync">
+                        @(Svc.Busy ? "Dispatching…" : "Dispatch Agent")
+                    </button>
+                </div>
+            </div>
+
+            @if (Svc.Loading)
+            {
+                <div class="vi-loading">LOADING MISSIONS</div>
+            }
+            else if (!Svc.MissionRows().Any())
+            {
+                <div class="vi-empty">
+                    <span class="material-symbols-outlined">smart_toy</span>
+                    No missions dispatched yet
+                </div>
+            }
+            else
+            {
+                <div class="vi-panel" style="flex:1;min-height:0;">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Mission Log</span>
+                        <span class="vi-chip">@Svc.MissionRows().Count</span>
+                    </div>
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead>
+                                <tr>
+                                    <th>Objective</th>
+                                    <th>Status</th>
+                                    <th>Driver</th>
+                                    <th>Confidence</th>
+                                    <th>Started</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var m in Svc.MissionRows())
+                                {
+                                    <tr>
+                                        <td>
+                                            <div class="vi-td-title vi-trunc" style="max-width:260px;">@m.Objective</div>
+                                            @if (!string.IsNullOrWhiteSpace(m.Action))
+                                            {
+                                                <div class="vi-td-note vi-trunc">@m.Action</div>
+                                            }
+                                        </td>
+                                        <td><span class="vi-chip @MissionsService.StatusClsFromRow(m.Status)">@m.Status.ToUpperInvariant()</span></td>
+                                        <td class="vi-td-mono">@(m.Driver ?? "—")</td>
+                                        <td class="vi-td-mono">@(m.Confidence.ToString("0.00"))</td>
+                                        <td class="vi-td-mono vi-faint">@m.CreatedAt</td>
+                                        <td>
+                                            <button class="vi-btn sm" @onclick="() => Svc.ViewAsync(m.MissionId)">View</button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <!-- Agent inventory + logs -->
+        <div class="vi-stack" style="min-height:0;overflow-y:auto;">
+            @if (_agents?.Agents.Any() == true)
+            {
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Agent Inventory</span>
+                        <span class="vi-chip">@_agents.Total</span>
+                    </div>
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Role</th>
+                                    <th>Status</th>
+                                    <th>Task</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var a in _agents.Agents)
+                                {
+                                    <tr>
+                                        <td><div class="vi-td-title">@a.Name</div></td>
+                                        <td class="vi-td-mono">@a.Role</td>
+                                        <td><span class="vi-chip @AgentStatusCls(a.Status)">@a.Status.ToUpperInvariant()</span></td>
+                                        <td class="vi-td-mono vi-faint vi-trunc" style="max-width:180px;">@(a.CurrentTask ?? "—")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            }
+
+            @if (_logs?.Entries.Any() == true)
+            {
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Agent Log</span>
+                        <span class="vi-chip">@_logs.Total</span>
+                    </div>
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Agent</th>
+                                    <th>Action</th>
+                                    <th>Detail</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var e in _logs.Entries.Take(30))
+                                {
+                                    <tr>
+                                        <td class="vi-td-mono vi-faint">@(e.Timestamp.Length > 16 ? e.Timestamp[..16] : e.Timestamp)</td>
+                                        <td class="vi-td-mono">@e.AgentId</td>
+                                        <td class="vi-td-mono">@e.Action</td>
+                                        <td class="vi-td-mono vi-faint vi-trunc" style="max-width:200px;">@(e.Detail ?? "—")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            }
+
+            <!-- Result panel -->
+            @if (Svc.Viewing.HasValue || Svc.LastResult.HasValue)
+            {
+                var result = Svc.Viewing ?? Svc.LastResult;
+                var title  = Svc.Viewing.HasValue ? "Mission Result" : "Last Dispatch Result";
+                var r      = result!.Value;
+                var summary   = MissionStr(r, "summary", "analysis", "output", "result");
+                var action    = MissionStr(r, "recommended_action", "action", "next_step");
+                var findings  = MissionArr(r, "findings", "events", "results", "items");
+                var confidence = MissionDbl(r, "confidence", "score");
+
+                <div class="vi-panel soft">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">@title</span>
+                        @if (confidence > 0)
+                        {
+                            <span class="vi-chip @(confidence >= 0.7 ? "ok" : confidence >= 0.4 ? "warn" : "")">
+                                conf @confidence.ToString("0.00")
+                            </span>
+                        }
+                    </div>
+                    <div class="vi-panel-body vi-stack">
+                        @if (!string.IsNullOrWhiteSpace(summary) && summary != "--")
+                        {
+                            <div style="font-size:13px;color:var(--t2);line-height:1.6;">@summary</div>
+                        }
+
+                        @if (!string.IsNullOrWhiteSpace(action) && action != "--")
+                        {
+                            <div class="vi-panel" style="background:rgba(96,165,250,.06);border-left:2px solid var(--accent);padding:8px;margin-top:4px;">
+                                <div class="vi-label" style="margin-bottom:3px;">Recommended Action</div>
+                                <div style="font-size:12px;color:var(--t2);">@action</div>
+                            </div>
+                        }
+
+                        @if (findings.Count > 0)
+                        {
+                            <div>
+                                <div class="vi-label" style="margin-bottom:4px;">Findings (@findings.Count)</div>
+                                @foreach (var f in findings.Take(5))
+                                {
+                                    var ftitle = MissionStr(f, "title", "event_id", "id", "name");
+                                    var fsrc   = MissionStr(f, "source", "type");
+                                    <div class="vi-item" style="padding:4px 6px;margin-bottom:2px;">
+                                        <div class="vi-item-title vi-trunc" style="max-width:100%;">@ftitle</div>
+                                        @if (fsrc != "--") { <div class="vi-item-meta vi-faint">@fsrc</div> }
+                                    </div>
+                                }
+                                @if (findings.Count > 5)
+                                {
+                                    <div class="vi-faint" style="font-size:11px;padding:4px;">+@(findings.Count - 5) more findings</div>
+                                }
+                            </div>
+                        }
+
+                        @if (string.IsNullOrWhiteSpace(summary) || summary == "--")
+                        {
+                            <details style="margin-top:4px;">
+                                <summary class="vi-faint" style="font-size:11px;cursor:pointer;">Raw result</summary>
+                                <pre style="font:400 10px/1.6 var(--mono);color:var(--t2);white-space:pre-wrap;word-break:break-all;overflow:auto;max-height:300px;margin-top:4px;">@r.ToString()</pre>
+                            </details>
+                        }
+                    </div>
+                </div>
+
+                <!-- Action links -->
+                <div class="vi-row" style="gap:6px;flex-wrap:wrap;">
+                    <a class="vi-btn sm" href="/triage">Triage →</a>
+                    <a class="vi-btn sm" href="/events">Events →</a>
+                    <a class="vi-btn sm" href="/signals">Signals →</a>
+                </div>
+            }
+            else
+            {
+                <div class="vi-panel soft">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Result</span></div>
+                    <div class="vi-empty">Dispatch a mission or select one to view results.</div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    AgentLlmStatusDto? _llm;
+    AgentsListResponse? _agents;
+    MissionLogResponse? _logs;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Task.WhenAll(
+            Svc.EnsureLoadedAsync(),
+            LoadLlmAsync(),
+            LoadAgentDataAsync()
+        );
+    }
+
+    async Task LoadLlmAsync()
+    {
+        try { _llm = await Api.GetAgentLlmStatusAsync(); }
+        catch { }
+    }
+
+    async Task LoadAgentDataAsync()
+    {
+        try
+        {
+            _agents = await Api.GetAgentsAsync();
+            _logs = await Api.GetAgentLogsAsync(50);
+        }
+        catch (Exception ex)
+        {
+            Toast.ShowError($"Agent data unavailable: {ex.Message}");
+        }
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+
+    static string AgentStatusCls(string s) => s.ToLowerInvariant() switch
+    {
+        "busy" or "running" => "warn",
+        "idle" => "ok",
+        "error" => "err",
+        _ => ""
+    };
+
+    static string MissionStr(System.Text.Json.JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+        {
+            if (!el.TryGetProperty(k, out var v)) continue;
+            if (v.ValueKind == System.Text.Json.JsonValueKind.String) return v.GetString() ?? "--";
+            return v.ToString();
+        }
+        return "--";
+    }
+
+    static double MissionDbl(System.Text.Json.JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.Number)
+                return v.GetDouble();
+        return 0;
+    }
+
+    static List<System.Text.Json.JsonElement> MissionArr(System.Text.Json.JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.Array)
+                return v.EnumerateArray().ToList();
+        return new();
+    }
+}

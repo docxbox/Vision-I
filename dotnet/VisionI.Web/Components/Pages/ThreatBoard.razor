@@ -1,0 +1,141 @@
+@page "/threatboard"
+@layout AnalystLayout
+@inject ThreatBoardService Svc
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>Threat Board | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Assess / Threat Board</div>
+            <h1 class="vi-h1">Global Threat Assessment</h1>
+            <div class="vi-sub">ZONE SCORING · TREND ANALYSIS · SIGNAL CONVERGENCE</div>
+        </div>
+        <div class="vi-page-actions">
+            <span class="vi-chip @ThreatBoardService.LevelClass(Svc.OverallLevel)">
+                OVERALL: @Svc.OverallLevel.ToUpperInvariant()
+            </span>
+            <select class="vi-select sm" style="width:120px;" @bind="Svc.Hours" @bind:after="ReloadAsync">
+                <option value="6">6 h</option>
+                <option value="12">12 h</option>
+                <option value="24">24 h</option>
+                <option value="48">48 h</option>
+                <option value="72">72 h</option>
+            </select>
+            <button class="vi-btn" disabled="@Svc.Loading" @onclick="ReloadAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Critical</div>
+            <div class="vi-metric-val crit">@Svc.CriticalCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">High</div>
+            <div class="vi-metric-val warn">@Svc.HighCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Medium</div>
+            <div class="vi-metric-val info">@Svc.MediumCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Total Zones</div>
+            <div class="vi-metric-val accent">@Svc.TotalZones</div>
+        </div>
+    </div>
+
+    @if (Svc.Loading)
+    {
+        <div class="vi-loading">ASSESSING GLOBAL THREAT PICTURE</div>
+    }
+    else if (!string.IsNullOrWhiteSpace(Svc.Error))
+    {
+        <div class="vi-err">@Svc.Error</div>
+    }
+    else if (!Svc.Zones.Any())
+    {
+        <div class="vi-empty">
+            <span class="material-symbols-outlined">radar</span>
+            No threat zones detected in the selected window. System is nominal.
+        </div>
+    }
+    else
+    {
+        <div class="vi-threat-grid">
+            @foreach (var zone in Svc.Zones)
+            {
+                <div class="vi-threat-card @ThreatBoardService.LevelClass(zone.ThreatLevel)"
+                     @onclick="() => OpenSituation(zone.Name)" style="cursor:pointer;">
+                    <div class="vi-threat-card-hdr">
+                        <div class="vi-threat-name vi-trunc">@zone.Name</div>
+                        <span class="vi-chip @ThreatBoardService.LevelClass(zone.ThreatLevel)" style="font-size:10px;">
+                            @zone.ThreatLevel.ToUpperInvariant()
+                        </span>
+                    </div>
+
+                    <div class="vi-threat-score">
+                        <span style="font-size:22px;font-weight:700;color:var(--t);">@zone.Score.ToString("F1")</span>
+                        <div class="vi-threat-trend @ThreatBoardService.TrendClass(zone.Trend)">
+                            <span class="material-symbols-outlined" style="font-size:14px;">@ThreatBoardService.TrendIcon(zone.Trend)</span>
+                            <span style="font-size:10px;">@zone.Trend.ToUpperInvariant()</span>
+                        </div>
+                    </div>
+
+                    <div class="vi-threat-stats">
+                        <span class="vi-td-mono" title="Alerts">
+                            <span class="material-symbols-outlined" style="font-size:11px;">notifications_active</span>
+                            @zone.AlertCount
+                        </span>
+                        <span class="vi-td-mono" title="Narratives">
+                            <span class="material-symbols-outlined" style="font-size:11px;">hub</span>
+                            @zone.NarrativeCount
+                        </span>
+                    </div>
+
+                    @if (zone.TopSignals.Any())
+                    {
+                        <div class="vi-threat-signals">
+                            @foreach (var sig in zone.TopSignals.Take(3))
+                            {
+                                <span class="vi-chip" style="font-size:9px;padding:2px 5px;">@sig.Replace("_", " ")</span>
+                            }
+                        </div>
+                    }
+
+                    @if (zone.TopActors.Any())
+                    {
+                        <div class="vi-threat-actors vi-trunc vi-faint" style="font-size:10px;margin-top:4px;">
+                            @string.Join(" · ", zone.TopActors.Take(3))
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    async Task ReloadAsync() => await Svc.LoadAsync();
+
+    void OpenSituation(string name)
+    {
+        var slug = name.ToLowerInvariant()
+            .Replace(" ", "-")
+            .Replace("/", "-")
+            .Replace(".", "-");
+        Nav.NavigateTo($"/situation/{Uri.EscapeDataString(slug)}?topic={Uri.EscapeDataString(name)}");
+    }
+
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+}

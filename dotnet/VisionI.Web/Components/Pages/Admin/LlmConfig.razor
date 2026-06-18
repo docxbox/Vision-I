@@ -1,0 +1,234 @@
+@page "/admin/llm"
+@layout AdminLayout
+@inject AdminLlmService Svc
+@implements IDisposable
+
+<PageTitle>LLM Config | Vision-I Admin</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Admin / AI</div>
+            <h1 class="vi-h1">LLM Configuration</h1>
+            <div class="vi-sub">PROVIDER - MODEL FALLBACKS - API KEY</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" @onclick="Svc.LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Svc.SetupSummary))
+    {
+        <div class="vi-metrics">
+            <div class="vi-metric" style="flex:1;">
+                <div class="vi-metric-label">Current Config</div>
+                <div style="font-size:13px;color:var(--t2);margin-top:4px;">@Svc.SetupSummary</div>
+            </div>
+            <div class="vi-metric" style="flex:1;">
+                <div class="vi-metric-label">JARVIS Runtime</div>
+                <div class="vi-row" style="gap:8px;margin-top:4px;align-items:center;">
+                    <span class="vi-chip @(Svc.RuntimeOnline ? "ok" : "err")">@(Svc.RuntimeOnline ? "ONLINE" : "OFFLINE")</span>
+                    <span style="font-size:13px;color:var(--t2);">@Svc.RuntimeSummary</span>
+                </div>
+            </div>
+        </div>
+    }
+
+    <div class="vi-split" style="flex:1;min-height:0;">
+        <div class="vi-panel">
+            <div class="vi-panel-hdr"><span class="vi-panel-title">Provider Setup</span></div>
+            <div class="vi-panel-body vi-stack">
+                <div class="vi-form-row">
+                    <div class="vi-field" style="flex:1;">
+                        <label class="vi-label">Provider</label>
+                        <select class="vi-select" @bind="Svc.Provider" @bind:after="() => Svc.ApplyPreset(Svc.Provider)">
+                            <option value="openrouter">OpenRouter</option>
+                            <option value="openai">OpenAI</option>
+                            <option value="anthropic">Anthropic</option>
+                            <option value="gemini">Gemini</option>
+                            <option value="groq">Groq</option>
+                            <option value="ollama">Ollama (local)</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                    </div>
+                    <div class="vi-field" style="flex:1;">
+                        <label class="vi-label">Model / Fallback Chain</label>
+                        @if (Svc.IsOpenRouter)
+                        {
+                            <div class="vi-panel soft" style="padding:10px;border-radius:10px;">
+                                <div class="vi-row" style="gap:6px;flex-wrap:wrap;">
+                                    @foreach (var model in Svc.EffectiveModels)
+                                    {
+                                        <span class="vi-chip ok" title="@model">@ShortModel(model)</span>
+                                    }
+                                </div>
+                                <div class="vi-faint" style="font-size:11px;margin-top:8px;">
+                                    Free-only OpenRouter chain is enforced server-side. This field is not editable for paid model safety.
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <input class="vi-input" placeholder="Model name" @bind="Svc.Model" />
+                        }
+                    </div>
+                </div>
+
+                <div class="vi-field">
+                    <label class="vi-label">Base URL</label>
+                    <input class="vi-input" placeholder="https://openrouter.ai/api" @bind="Svc.BaseUrl" />
+                </div>
+
+                <div class="vi-field">
+                    <label class="vi-label">@((Svc.SelectedProviderOption?.ApiKeyLabel) ?? "API Key")</label>
+                    <input class="vi-input" type="password" placeholder="OpenRouter key or provider key" @bind="Svc.ApiKey" />
+                    @if (Svc.HasStoredKey)
+                    {
+                        <div class="vi-faint" style="font-size:11px;margin-top:6px;">
+                            Stored key detected. Leave blank to reuse it for Apply/Test, or enter a new key to replace it.
+                        </div>
+                    }
+                </div>
+
+                <div class="vi-form-row">
+                    <label class="vi-row" style="gap:6px;font:600 11px/1 var(--mono);color:var(--tm);">
+                        <input type="checkbox" @bind="Svc.IsEnabled" /> Enabled
+                    </label>
+                    <label class="vi-row" style="gap:6px;font:600 11px/1 var(--mono);color:var(--tm);">
+                        <input type="checkbox" @bind="Svc.IsDefault" /> Default
+                    </label>
+                </div>
+
+                <div class="vi-row" style="gap:8px;">
+                    <button class="vi-btn" disabled="@Svc.Busy" @onclick="Svc.TestAsync">
+                        @(Svc.Busy ? "Testing..." : "Test Connection")
+                    </button>
+                    <button class="vi-btn primary" disabled="@Svc.Busy" @onclick="Svc.ApplyAsync">
+                        @(Svc.Busy ? "Activating..." : "Save & Activate JARVIS")
+                    </button>
+                </div>
+
+                @if (!Svc.HasSavedDefault)
+                {
+                    <div class="vi-panel" style="border-left:2px solid var(--warn);padding:10px;">
+                        <div class="vi-label">Activation Required</div>
+                        <div class="vi-faint" style="font-size:12px;line-height:1.6;">
+                            The key in this form is not active until it is saved. Click Save & Activate JARVIS after pasting the OpenRouter key.
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="vi-stack">
+            <div class="vi-panel soft">
+                <div class="vi-panel-hdr"><span class="vi-panel-title">Result</span></div>
+                @if (Svc.Result.HasValue)
+                {
+                    var res = Svc.Result.Value;
+                    var status  = LlmStr(res, "status", "result");
+                    var msg     = LlmStr(res, "message", "detail", "error");
+                    var latency = LlmStr(res, "latency_ms", "latency");
+                    var model   = LlmStr(res, "model", "model_used", "last_model_used");
+                    var isOk    = status is "ok" or "success" or "connected" or "applied" or "tested";
+                    <div class="vi-panel-body vi-stack">
+                        <div class="vi-row" style="gap:8px;align-items:center;">
+                            <span class="vi-chip @(isOk ? "ok" : "err")">@status.ToUpperInvariant()</span>
+                            @if (msg != "--") { <span class="vi-faint" style="font-size:12px;">@msg</span> }
+                        </div>
+                        @if (model != "--")  { <div class="vi-kv"><span class="vi-kv-key">Model</span><span class="vi-kv-val vi-mono">@model</span></div> }
+                        @if (latency != "--"){ <div class="vi-kv"><span class="vi-kv-key">Latency</span><span class="vi-kv-val vi-mono @(isOk ? "ok" : "")">@latency ms</span></div> }
+                        @if (!isOk)
+                        {
+                            <div class="vi-panel" style="border-left:2px solid var(--warn);padding:8px;">
+                                <div class="vi-faint" style="font-size:11px;">@ProviderHint(Svc.Provider)</div>
+                            </div>
+                        }
+                    </div>
+                }
+                else if (Svc.Current is { } cur)
+                {
+                    <div class="vi-panel-body vi-stack">
+                        <div class="vi-label">Active Providers</div>
+                        @if (cur.Providers?.Any() == true)
+                        {
+                            @foreach (var p in cur.Providers)
+                            {
+                                <div class="vi-kv">
+                                    <span class="vi-kv-key">@p.Provider</span>
+                                    <span class="vi-chip @(p.IsEnabled ? "ok" : "")">@p.Model</span>
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <div class="vi-faint" style="font-size:12px;">No providers configured</div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="vi-empty">Run a test or apply config to see results.</div>
+                }
+            </div>
+
+            <div class="vi-panel soft">
+                <div class="vi-panel-hdr"><span class="vi-panel-title">Readiness Guidance</span></div>
+                <div class="vi-panel-body">
+                    <div style="font-size:12px;color:var(--tm);line-height:1.7;">@ProviderGuide(Svc.Provider)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+
+    static string LlmStr(System.Text.Json.JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+        {
+            if (!el.TryGetProperty(k, out var v)) continue;
+            if (v.ValueKind == System.Text.Json.JsonValueKind.String) return v.GetString() ?? "--";
+            return v.ToString();
+        }
+        return "--";
+    }
+
+    static string ProviderHint(string provider) => provider.ToLowerInvariant() switch
+    {
+        "openrouter" => "Verify your OpenRouter API key is active. JARVIS is locked to a hardcoded free-only OpenRouter fallback chain.",
+        "openai"    => "Verify your API key starts with sk- and has sufficient quota. Check provider dashboard rate limits.",
+        "anthropic" => "Verify your API key starts with sk-ant-. Ensure the selected Claude model name is available to the key.",
+        "gemini"    => "Verify your Gemini API key and selected model access.",
+        "groq"      => "Verify your Groq API key and model name.",
+        "ollama"    => "Ollama must be running locally on port 11434. Run `ollama serve` and `ollama pull <model>` first.",
+        "custom"    => "Check the base URL is reachable from this host and the API key format matches the provider.",
+        _           => "Verify the API key and base URL are correct for this provider."
+    };
+
+    static string ProviderGuide(string provider) => provider.ToLowerInvariant() switch
+    {
+        "openrouter" => "Recommended for JARVIS. Runtime inference uses only free OpenRouter models, starting with openai/gpt-oss-20b:free and falling back through other current free routes.",
+        "openai"    => "Use an OpenAI-compatible key and one model name such as gpt-4o.",
+        "anthropic" => "API keys start with sk-ant-. Use a Messages API model available on your account.",
+        "gemini"    => "Use a Gemini API key and a model such as gemini-2.5-pro or gemini-2.0-flash.",
+        "groq"      => "Use a Groq API key and a supported fast inference model.",
+        "ollama"    => "Ollama runs locally, no API key required. Base URL should be http://localhost:11434.",
+        "custom"    => "Set the base URL to an OpenAI-compatible endpoint. Test before applying.",
+        _           => "Select a provider to see readiness guidance."
+    };
+
+    static string ShortModel(string model)
+    {
+        return model.Replace(":free", "", StringComparison.OrdinalIgnoreCase);
+    }
+}

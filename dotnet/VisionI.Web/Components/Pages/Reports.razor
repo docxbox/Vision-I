@@ -1,0 +1,637 @@
+@page "/reports"
+@layout AnalystLayout
+@inject ApiService Api
+@inject ToastService Toast
+@inject IJSRuntime JS
+@using System.Net
+@using System.Text
+@using System.Text.Json
+@using VisionI.Web.Models
+
+<PageTitle>Reports | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Analyst / Reports</div>
+            <h1 class="vi-h1">Report Studio</h1>
+            <div class="vi-sub">ENTITY / ACTOR / EVENT / ASSET / WORD / PDF</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" disabled="@_loading" @onclick="LoadAsync">
+                <span class="material-symbols-outlined" style="font-size:15px;">refresh</span>
+                Refresh
+            </button>
+            <button class="vi-btn" disabled="@(_loading || !_events.Any())" @onclick="ExportWordAsync">
+                <span class="material-symbols-outlined" style="font-size:15px;">description</span>
+                Export Word
+            </button>
+            <button class="vi-btn primary" disabled="@(_loading || !_events.Any())" @onclick="ExportPdfAsync">
+                <span class="material-symbols-outlined" style="font-size:15px;">picture_as_pdf</span>
+                Generate PDF
+            </button>
+        </div>
+    </div>
+
+    <div class="vi-panel" style="margin-bottom:14px;">
+        <div class="vi-panel-hdr">
+            <span class="vi-panel-title">Report Controls</span>
+            <span class="vi-chip info">@_events.Count events / @_entities.Count entities / @_assets.Count assets</span>
+        </div>
+        <div class="vi-panel-body vi-stack" style="gap:12px;">
+            <div style="display:grid;grid-template-columns:180px minmax(260px,1fr) 150px 150px 130px 120px;gap:10px;align-items:end;">
+                <div class="vi-field">
+                    <label class="vi-label">Report type</label>
+                    <select class="vi-select" @bind="_reportType">
+                        <option value="Executive">Executive brief</option>
+                        <option value="Entity">Entity profile</option>
+                        <option value="Actor">Actor dossier</option>
+                        <option value="Event">Event package</option>
+                        <option value="Asset">Asset movement</option>
+                        <option value="Source">Source audit</option>
+                    </select>
+                </div>
+                <div class="vi-field">
+                    <label class="vi-label">Subject / query</label>
+                    <input class="vi-input" list="report-subjects" placeholder="Iran, Ahmad Vahidi, vessel id, source, event keyword..."
+                           @bind="_subject" @bind:event="oninput" />
+                    <datalist id="report-subjects">
+                        @foreach (var e in _entities.Take(80))
+                        {
+                            <option value="@e.Name"></option>
+                        }
+                        @foreach (var a in _assets.Take(50))
+                        {
+                            <option value="@(a.Name ?? a.Callsign ?? a.Identifier ?? a.AssetId)"></option>
+                        }
+                    </datalist>
+                </div>
+                <div class="vi-field">
+                    <label class="vi-label">Source</label>
+                    <select class="vi-select" @bind="_source">
+                        <option value="">All sources</option>
+                        @foreach (var src in _sources)
+                        {
+                            <option value="@src">@src.ToUpperInvariant()</option>
+                        }
+                    </select>
+                </div>
+                <div class="vi-field">
+                    <label class="vi-label">Risk</label>
+                    <select class="vi-select" @bind="_risk">
+                        <option value="">All risk</option>
+                        <option value="critical">Critical &gt;= 0.9</option>
+                        <option value="high">High &gt;= 0.7</option>
+                        <option value="medium">Medium &gt;= 0.4</option>
+                        <option value="low">Low &lt; 0.4</option>
+                    </select>
+                </div>
+                <div class="vi-field">
+                    <label class="vi-label">Window</label>
+                    <select class="vi-select" @bind="_window">
+                        <option value="24">24 h</option>
+                        <option value="72">72 h</option>
+                        <option value="168">7 d</option>
+                        <option value="720">30 d</option>
+                    </select>
+                </div>
+                <div class="vi-field">
+                    <label class="vi-label">Rows</label>
+                    <select class="vi-select" @bind="_limit">
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                    </select>
+                </div>
+            </div>
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                <button class="vi-btn primary" disabled="@_loading" @onclick="BuildAsync">
+                    @(_loading ? "Building..." : "Build Report")
+                </button>
+                <button class="vi-btn sm" @onclick='() => QuickSubject("Iran")'>Iran</button>
+                <button class="vi-btn sm" @onclick='() => QuickSubject("United States")'>United States</button>
+                <button class="vi-btn sm" @onclick='() => QuickSubject("Hormuz")'>Hormuz</button>
+                <button class="vi-btn sm" @onclick='() => QuickSubject("opensky")'>OpenSky</button>
+                <button class="vi-btn sm" @onclick='() => QuickSubject("ais")'>AIS</button>
+                <span class="vi-chip">@ReportTitle</span>
+                <span class="vi-chip @RiskCls(MaxRisk)">@MaxRisk.ToString("0.00") max risk</span>
+                <span class="vi-chip info">@TopSources.Count source families</span>
+            </div>
+        </div>
+    </div>
+
+    @if (_loading && !_events.Any())
+    {
+        <div class="vi-loading">BUILDING REPORT CONTEXT</div>
+    }
+    else
+    {
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:14px;align-items:start;">
+            <div class="vi-stack" style="min-width:0;">
+                <section class="vi-panel" id="report-preview">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">@ReportTitle</span>
+                        <span class="vi-chip">@DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm 'UTC'")</span>
+                    </div>
+                    <div class="vi-panel-body vi-stack" style="gap:16px;">
+                        <div style="border:1px solid var(--bd);border-radius:14px;padding:14px;background:linear-gradient(135deg,rgba(139,92,246,.12),rgba(14,165,233,.05));">
+                            <div class="vi-kicker" style="margin-bottom:8px;">Executive Summary</div>
+                            <h2 style="margin:0 0 8px;font-size:24px;color:var(--t);">@ReportTitle</h2>
+                            <p style="margin:0;color:var(--t2);line-height:1.65;">@ExecutiveSummary</p>
+                        </div>
+
+                        <div class="vi-metrics">
+                            <div class="vi-metric">
+                                <div class="vi-metric-label">Events</div>
+                                <div class="vi-metric-val accent">@PreparedEvents.Count</div>
+                                <div class="vi-metric-note">selected evidence</div>
+                            </div>
+                            <div class="vi-metric">
+                                <div class="vi-metric-label">High Risk</div>
+                                <div class="vi-metric-val @(HighRiskCount > 0 ? "err" : "ok")">@HighRiskCount</div>
+                                <div class="vi-metric-note">&gt;= 0.7</div>
+                            </div>
+                            <div class="vi-metric">
+                                <div class="vi-metric-label">Entities</div>
+                                <div class="vi-metric-val">@PreparedEntities.Count</div>
+                                <div class="vi-metric-note">matched actors</div>
+                            </div>
+                            <div class="vi-metric">
+                                <div class="vi-metric-label">Assets</div>
+                                <div class="vi-metric-val ok">@PreparedAssets.Count</div>
+                                <div class="vi-metric-note">matched mobility</div>
+                            </div>
+                        </div>
+
+                        <ReportSection Title="Key Judgments">
+                            <ul class="vi-report-list">
+                                @foreach (var line in KeyJudgments)
+                                {
+                                    <li>@line</li>
+                                }
+                            </ul>
+                        </ReportSection>
+
+                        <ReportSection Title="Priority Events">
+                            @if (!PreparedEvents.Any())
+                            {
+                                <div class="vi-empty" style="padding:18px;">No matching events. Broaden the subject, source, risk, or window.</div>
+                            }
+                            else
+                            {
+                                <div class="vi-stack" style="gap:8px;">
+                                    @foreach (var e in PreparedEvents.Take(12))
+                                    {
+                                        <article style="border:1px solid var(--bd);border-radius:12px;padding:12px;background:rgba(255,255,255,.025);">
+                                            <div style="display:flex;gap:8px;align-items:flex-start;justify-content:space-between;">
+                                                <div style="min-width:0;">
+                                                    <a href="/events/@Uri.EscapeDataString(e.EventId ?? "")" class="vi-td-title" style="font-size:14px;text-decoration:none;color:var(--t);overflow-wrap:anywhere;">@e.Title</a>
+                                                    <div class="vi-td-mono vi-faint" style="font-size:10px;margin-top:4px;">@(e.Source?.ToUpperInvariant() ?? "--") / @(e.EventType ?? "event") / @Fmt(e.Timestamp)</div>
+                                                </div>
+                                                <span class="vi-chip @RiskCls(e.RiskScore ?? 0)">@((e.RiskScore ?? 0).ToString("0.00"))</span>
+                                            </div>
+                                            <p style="margin:9px 0 0;color:var(--t2);font-size:12px;line-height:1.55;">@Clip(EventText(e), 260)</p>
+                                            @if (e.Actors.Any() || e.Tags.Any())
+                                            {
+                                                <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:9px;">
+                                                    @foreach (var actor in e.Actors.Take(4))
+                                                    {
+                                                        <span class="vi-chip info" style="font-size:9px;">@(actor.Name ?? actor.Canonical)</span>
+                                                    }
+                                                    @foreach (var tag in e.Tags.Take(4))
+                                                    {
+                                                        <span class="vi-chip" style="font-size:9px;">#@tag</span>
+                                                    }
+                                                </div>
+                                            }
+                                        </article>
+                                    }
+                                </div>
+                            }
+                        </ReportSection>
+
+                        <ReportSection Title="Entities & Actors">
+                            @if (!PreparedEntities.Any())
+                            {
+                                <div class="vi-empty" style="padding:18px;">No matched entities. Try an actor, location, organization, or broader query.</div>
+                            }
+                            else
+                            {
+                                <div class="vi-tbl-wrap">
+                                    <table class="vi-table">
+                                        <thead>
+                                            <tr><th>Name</th><th>Type</th><th>Mentions</th><th>Influence</th><th>Narrative</th><th>Sentiment</th></tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var e in PreparedEntities.Take(16))
+                                            {
+                                                <tr>
+                                                    <td><a class="vi-td-title" style="color:var(--t);text-decoration:none;" href="/entities/@Slug(e.Name ?? e.EntityId ?? e.Id ?? "")">@(e.Name ?? e.EntityId ?? e.Id)</a></td>
+                                                    <td><span class="vi-chip">@((e.Type ?? "entity").ToUpperInvariant())</span></td>
+                                                    <td class="vi-td-mono">@e.MentionCount</td>
+                                                    <td class="vi-td-mono">@((e.InfluenceScore ?? 0).ToString("0.00"))</td>
+                                                    <td class="vi-td-mono">@e.NarrativeCount</td>
+                                                    <td><span class="vi-chip @SentimentCls(e.SentimentScore ?? 0.5)">@((e.SentimentScore ?? 0.5).ToString("0.00"))</span></td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                        </ReportSection>
+
+                        <ReportSection Title="Assets & Mobility">
+                            @if (!PreparedAssets.Any())
+                            {
+                                <div class="vi-empty" style="padding:18px;">No matched assets. Asset reports can be built by callsign, MMSI/ICAO24, vessel, or aircraft name.</div>
+                            }
+                            else
+                            {
+                                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
+                                    @foreach (var a in PreparedAssets.Take(12))
+                                    {
+                                        <a href="/assets/@Uri.EscapeDataString(a.AssetId ?? "")" style="text-decoration:none;color:inherit;border:1px solid var(--bd);border-radius:12px;padding:12px;background:rgba(255,255,255,.025);">
+                                            <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+                                                <div class="vi-td-title vi-trunc">@(a.Name ?? a.Callsign ?? a.Identifier ?? a.AssetId)</div>
+                                                <span class="vi-chip @TypeCls(a.AssetType)">@((a.AssetType ?? "asset").ToUpperInvariant())</span>
+                                            </div>
+                                            <div class="vi-td-mono vi-faint" style="font-size:10px;margin-top:8px;">
+                                                @(a.LastLat?.ToString("0.00") ?? "--"), @(a.LastLon?.ToString("0.00") ?? "--") / @(a.LastSpeed?.ToString("0") ?? "--") kt / @Fmt(a.LastSeen)
+                                            </div>
+                                        </a>
+                                    }
+                                </div>
+                            }
+                        </ReportSection>
+                    </div>
+                </section>
+            </div>
+
+            <aside class="vi-stack" style="min-width:0;">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Source Mix</span></div>
+                    <div class="vi-panel-body vi-stack" style="gap:8px;">
+                        @foreach (var s in TopSources)
+                        {
+                            <div class="vi-kv">
+                                <span class="vi-kv-key vi-trunc">@s.Source.ToUpperInvariant()</span>
+                                <span class="vi-chip">@s.Count</span>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Report Actions</span></div>
+                    <div class="vi-panel-body vi-stack">
+                        <button class="vi-btn" @onclick="ExportWordAsync" disabled="@(!_events.Any())">Open in Word (.doc)</button>
+                        <button class="vi-btn" @onclick="ExportPdfAsync" disabled="@(!_events.Any())">Print / Save as PDF</button>
+                        <button class="vi-btn" @onclick="CopyMarkdownAsync" disabled="@(!_events.Any())">Copy Markdown</button>
+                        <div style="font-size:11px;color:var(--tf);line-height:1.5;">
+                            Word export uses local HTML-compatible `.doc`, so it opens in Microsoft Word and can be saved as DOCX or PDF.
+                        </div>
+                    </div>
+                </div>
+
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Source Catalog</span></div>
+                    <div class="vi-panel-body" style="max-height:360px;overflow:auto;">
+                        @foreach (var s in _sourceFacets.Take(30))
+                        {
+                            <button class="vi-kv" style="width:100%;background:none;border:none;padding:5px 0;text-align:left;cursor:pointer;"
+                                    @onclick="() => SetSource(s.Source)">
+                                <span class="vi-kv-key vi-trunc">@s.Source.ToUpperInvariant()</span>
+                                <span class="vi-chip">@s.Count</span>
+                            </button>
+                        }
+                    </div>
+                </div>
+            </aside>
+        </div>
+    }
+</div>
+
+@code {
+    bool _loading;
+    string _reportType = "Executive";
+    string _subject = "";
+    string _source = "";
+    string _risk = "";
+    string _window = "24";
+    int _limit = 100;
+
+    List<EventDto> _events = new();
+    List<EntityDto> _entities = new();
+    List<AssetDto> _assets = new();
+    List<string> _sources = new();
+    List<SourceFacet> _sourceFacets = new();
+
+    List<EventDto> PreparedEvents => _events
+        .Where(PassesSubject)
+        .Where(PassesRisk)
+        .OrderByDescending(e => e.RiskScore ?? 0)
+        .ThenByDescending(e => ParseTime(e.Timestamp))
+        .Take(_limit)
+        .ToList();
+
+    List<EntityDto> PreparedEntities
+    {
+        get
+        {
+            var fromEvents = PreparedEvents
+                .SelectMany(e => e.Actors)
+                .Select(a => a.Name ?? a.Canonical)
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .GroupBy(v => v!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+            return _entities
+                .Where(e => string.IsNullOrWhiteSpace(_subject) || Matches(e.Name, _subject) || Matches(e.Type, _subject) || fromEvents.ContainsKey(e.Name ?? ""))
+                .OrderByDescending(e => fromEvents.TryGetValue(e.Name ?? "", out var c) ? c + e.MentionCount : e.MentionCount)
+                .ThenByDescending(e => e.InfluenceScore ?? 0)
+                .Take(50)
+                .ToList();
+        }
+    }
+
+    List<AssetDto> PreparedAssets => _assets
+        .Where(a => string.IsNullOrWhiteSpace(_subject) ||
+                    Matches(a.AssetId, _subject) ||
+                    Matches(a.Name, _subject) ||
+                    Matches(a.Callsign, _subject) ||
+                    Matches(a.Identifier, _subject) ||
+                    Matches(a.AssetType, _subject) ||
+                    Matches(a.OriginCountry, _subject))
+        .OrderByDescending(a => ParseTime(a.LastSeen))
+        .Take(50)
+        .ToList();
+
+    List<SourceCount> TopSources => PreparedEvents
+        .GroupBy(e => e.Source ?? "unknown", StringComparer.OrdinalIgnoreCase)
+        .Select(g => new SourceCount(g.Key, g.Count()))
+        .OrderByDescending(x => x.Count)
+        .Take(8)
+        .ToList();
+
+    double MaxRisk => PreparedEvents.Select(e => e.RiskScore ?? 0).DefaultIfEmpty(0).Max();
+    int HighRiskCount => PreparedEvents.Count(e => (e.RiskScore ?? 0) >= 0.7);
+
+    string ReportTitle
+    {
+        get
+        {
+            var subject = string.IsNullOrWhiteSpace(_subject) ? "Global" : _subject.Trim();
+            return _reportType switch
+            {
+                "Entity" => $"Entity Intelligence Report: {subject}",
+                "Actor" => $"Actor Dossier: {subject}",
+                "Event" => $"Event Evidence Package: {subject}",
+                "Asset" => $"Asset Movement Report: {subject}",
+                "Source" => $"Source Audit Report: {subject}",
+                _ => $"Executive Intelligence Brief: {subject}"
+            };
+        }
+    }
+
+    string ExecutiveSummary
+    {
+        get
+        {
+            if (!PreparedEvents.Any())
+                return "No matching intelligence evidence is currently loaded for this report configuration.";
+            var leadSource = TopSources.FirstOrDefault()?.Source ?? "mixed sources";
+            var leadEntity = PreparedEntities.FirstOrDefault()?.Name ?? "no dominant entity";
+            return $"{PreparedEvents.Count} selected events were reviewed across {TopSources.Count} source families. " +
+                   $"The current maximum risk score is {MaxRisk:0.00}, with {HighRiskCount} high-risk event(s). " +
+                   $"The evidence base is led by {leadSource.ToUpperInvariant()}, with {leadEntity} as the strongest matched entity/actor anchor.";
+        }
+    }
+
+    IEnumerable<string> KeyJudgments
+    {
+        get
+        {
+            if (!PreparedEvents.Any())
+            {
+                yield return "No matching evidence was found for the selected report controls.";
+                yield break;
+            }
+            yield return $"{PreparedEvents.Count} events match the current report scope; {HighRiskCount} are high risk.";
+            if (TopSources.Any())
+                yield return $"Primary source contribution is {TopSources.First().Source.ToUpperInvariant()} with {TopSources.First().Count} selected event(s).";
+            if (PreparedEntities.Any())
+                yield return $"Top entity anchor is {PreparedEntities.First().Name} with {PreparedEntities.First().MentionCount} indexed mentions.";
+            if (PreparedAssets.Any())
+                yield return $"{PreparedAssets.Count} matching mobility assets are available for map/detail follow-up.";
+            yield return "Analyst should validate source credibility and open each priority event before final dissemination.";
+        }
+    }
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    async Task LoadAsync() => await BuildAsync();
+
+    async Task BuildAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var to = DateTimeOffset.UtcNow;
+            var from = to.AddHours(-double.Parse(_window));
+            var query = string.IsNullOrWhiteSpace(_subject) ? null : _subject.Trim();
+            var source = string.IsNullOrWhiteSpace(_source) ? null : _source;
+
+            var eventsTask = Api.GetEventsAsync(source: source, query: query, from: from.ToString("O"), to: to.ToString("O"), limit: Math.Max(_limit, 200));
+            var entitiesTask = Api.GetEntitiesAsync(limit: 200);
+            var assetsTask = Api.GetAssetsAsync(limit: 300);
+            var sourceTask = Api.GetAsync<JsonElement?>("api/events/sources?limit=100");
+
+            await Task.WhenAll(eventsTask, entitiesTask, assetsTask, sourceTask);
+
+            _events = eventsTask.Result?.Events ?? new();
+            _entities = entitiesTask.Result?.Entities ?? new();
+            _assets = assetsTask.Result?.Assets ?? new();
+            LoadSourceFacets(sourceTask.Result);
+
+            if (_events.Count == 0 && !string.IsNullOrWhiteSpace(query))
+            {
+                var fallback = await Api.GetEventsAsync(source: source, from: from.ToString("O"), to: to.ToString("O"), limit: Math.Max(_limit, 200));
+                _events = fallback?.Events ?? new();
+            }
+        }
+        catch (Exception ex)
+        {
+            Toast.ShowError($"Report build failed: {ex.Message}");
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    void LoadSourceFacets(JsonElement? root)
+    {
+        _sourceFacets.Clear();
+        if (root is { ValueKind: JsonValueKind.Object } json &&
+            json.TryGetProperty("sources", out var sources) &&
+            sources.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in sources.EnumerateArray())
+            {
+                var source = item.TryGetProperty("source", out var s) ? s.GetString() : null;
+                var count = item.TryGetProperty("count", out var c) && c.TryGetInt32(out var n) ? n : 0;
+                if (!string.IsNullOrWhiteSpace(source))
+                    _sourceFacets.Add(new SourceFacet(source!, count));
+            }
+        }
+
+        _sources = _sourceFacets.Select(s => s.Source).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s).ToList();
+        if (!_sources.Any())
+            _sources = _events.Select(e => e.Source ?? "").Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(s => s).ToList();
+    }
+
+    async Task ExportPdfAsync()
+    {
+        if (!_events.Any()) return;
+        await JS.InvokeVoidAsync("viReports.printHtml", BuildExportHtml());
+        Toast.ShowSuccess("Report opened in print dialog. Choose Save as PDF.");
+    }
+
+    async Task ExportWordAsync()
+    {
+        if (!_events.Any()) return;
+        var file = SafeFileName(ReportTitle) + ".doc";
+        await JS.InvokeVoidAsync("viReports.downloadWord", file, BuildExportHtml());
+        Toast.ShowSuccess("Word-compatible report downloaded.");
+    }
+
+    async Task CopyMarkdownAsync()
+    {
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", BuildMarkdown());
+        Toast.ShowSuccess("Report markdown copied.");
+    }
+
+    void QuickSubject(string value)
+    {
+        _subject = value;
+        _ = BuildAsync();
+    }
+
+    void SetSource(string value)
+    {
+        _source = value;
+        _ = BuildAsync();
+    }
+
+    bool PassesRisk(EventDto e) => _risk switch
+    {
+        "critical" => (e.RiskScore ?? 0) >= 0.9,
+        "high" => (e.RiskScore ?? 0) >= 0.7,
+        "medium" => (e.RiskScore ?? 0) >= 0.4,
+        "low" => (e.RiskScore ?? 0) < 0.4,
+        _ => true
+    };
+
+    bool PassesSubject(EventDto e)
+    {
+        if (string.IsNullOrWhiteSpace(_subject)) return true;
+        var q = _subject.Trim();
+        return Matches(e.Title, q) ||
+               Matches(e.Description, q) ||
+               Matches(e.Body, q) ||
+               Matches(e.Source, q) ||
+               Matches(e.EventType, q) ||
+               e.Actors.Any(a => Matches(a.Name, q) || Matches(a.Canonical, q) || Matches(a.Type, q)) ||
+               e.Tags.Any(t => Matches(t, q));
+    }
+
+    string BuildMarkdown()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"# {ReportTitle}");
+        sb.AppendLine();
+        sb.AppendLine($"Generated: {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC");
+        sb.AppendLine();
+        sb.AppendLine("## Executive Summary");
+        sb.AppendLine(ExecutiveSummary);
+        sb.AppendLine();
+        sb.AppendLine("## Key Judgments");
+        foreach (var line in KeyJudgments) sb.AppendLine($"- {line}");
+        sb.AppendLine();
+        sb.AppendLine("## Priority Events");
+        foreach (var e in PreparedEvents.Take(20))
+            sb.AppendLine($"- [{(e.RiskScore ?? 0):0.00}] {e.Title} ({e.Source}, {Fmt(e.Timestamp)})");
+        return sb.ToString();
+    }
+
+    string BuildExportHtml()
+    {
+        var sb = new StringBuilder();
+        sb.Append(@"<!doctype html><html><head><meta charset=""utf-8"">
+<style>
+body{font-family:Calibri,Arial,sans-serif;color:#111827;margin:38px;line-height:1.45}
+h1{font-size:26px;margin:0;color:#111827} h2{font-size:17px;margin-top:22px;border-bottom:1px solid #d1d5db;padding-bottom:5px}
+.meta{font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.08em;margin-top:4px}
+.summary{border:1px solid #d1d5db;background:#f8fafc;padding:14px;margin:18px 0;border-radius:8px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:14px 0}.metric{border:1px solid #d1d5db;padding:9px;border-radius:7px}.metric b{display:block;font-size:22px}
+table{border-collapse:collapse;width:100%;font-size:10.5px}th,td{border:1px solid #d1d5db;padding:6px;text-align:left;vertical-align:top}th{background:#111827;color:white}
+li{margin-bottom:6px}.risk{font-weight:bold}.small{font-size:10px;color:#6b7280}
+</style></head><body>
+");
+        sb.Append($"<h1>{H(ReportTitle)}</h1>");
+        sb.Append($"<div class=\"meta\">Vision-I / {H(_reportType)} / Generated {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC / UNCLASSIFIED</div>");
+        sb.Append($"<div class=\"summary\"><strong>Executive Summary</strong><br>{H(ExecutiveSummary)}</div>");
+        sb.Append("<div class=\"grid\">");
+        sb.Append($"<div class=\"metric\">Events<b>{PreparedEvents.Count}</b></div>");
+        sb.Append($"<div class=\"metric\">High Risk<b>{HighRiskCount}</b></div>");
+        sb.Append($"<div class=\"metric\">Entities<b>{PreparedEntities.Count}</b></div>");
+        sb.Append($"<div class=\"metric\">Assets<b>{PreparedAssets.Count}</b></div>");
+        sb.Append("</div>");
+        sb.Append("<h2>Key Judgments</h2><ul>");
+        foreach (var line in KeyJudgments) sb.Append($"<li>{H(line)}</li>");
+        sb.Append("</ul>");
+        sb.Append("<h2>Priority Events</h2><table><thead><tr><th>Risk</th><th>Title</th><th>Source</th><th>Type</th><th>Time</th><th>Summary</th></tr></thead><tbody>");
+        foreach (var e in PreparedEvents.Take(40))
+            sb.Append($"<tr><td class=\"risk\">{(e.RiskScore ?? 0):0.00}</td><td>{H(e.Title)}</td><td>{H(e.Source)}</td><td>{H(e.EventType)}</td><td>{H(Fmt(e.Timestamp))}</td><td>{H(Clip(EventText(e), 360))}</td></tr>");
+        sb.Append("</tbody></table>");
+        sb.Append("<h2>Entities & Actors</h2><table><thead><tr><th>Name</th><th>Type</th><th>Mentions</th><th>Influence</th><th>Narratives</th><th>Sentiment</th></tr></thead><tbody>");
+        foreach (var e in PreparedEntities.Take(30))
+            sb.Append($"<tr><td>{H(e.Name)}</td><td>{H(e.Type)}</td><td>{e.MentionCount}</td><td>{(e.InfluenceScore ?? 0):0.00}</td><td>{e.NarrativeCount}</td><td>{(e.SentimentScore ?? 0.5):0.00}</td></tr>");
+        sb.Append("</tbody></table>");
+        sb.Append("<h2>Assets & Mobility</h2><table><thead><tr><th>Name</th><th>Type</th><th>Identifier</th><th>Position</th><th>Speed</th><th>Last Seen</th></tr></thead><tbody>");
+        foreach (var a in PreparedAssets.Take(30))
+            sb.Append($"<tr><td>{H(a.Name ?? a.Callsign ?? a.AssetId)}</td><td>{H(a.AssetType)}</td><td>{H(a.Identifier)}</td><td>{a.LastLat:0.00}, {a.LastLon:0.00}</td><td>{a.LastSpeed:0} kt</td><td>{H(Fmt(a.LastSeen))}</td></tr>");
+        sb.Append("</tbody></table>");
+        sb.Append("<p class=\"small\">Generated by Vision-I Report Studio. Validate source provenance before dissemination.</p>");
+        sb.Append("</body></html>");
+        return sb.ToString();
+    }
+
+    static string EventText(EventDto e) => e.Description ?? e.Snippet ?? e.Body ?? e.Reasoning ?? "No description available.";
+    static bool Matches(string? value, string query) => !string.IsNullOrWhiteSpace(value) && value.Contains(query, StringComparison.OrdinalIgnoreCase);
+    static string Clip(string? value, int max) => string.IsNullOrWhiteSpace(value) ? "--" : value.Length <= max ? value : value[..max].TrimEnd() + "...";
+    static string H(string? value) => WebUtility.HtmlEncode(value ?? "--");
+    static DateTime ParseTime(string? raw) => DateTime.TryParse(raw, out var dt) ? dt.ToUniversalTime() : DateTime.MinValue;
+    static string Slug(string value) => Uri.EscapeDataString(value.Trim().ToLowerInvariant().Replace(" ", "-"));
+    static string SafeFileName(string value) => string.Concat(value.Select(ch => char.IsLetterOrDigit(ch) ? ch : '-')).Trim('-').ToLowerInvariant();
+    static string Fmt(string? raw) => DateTimeOffset.TryParse(raw, out var dto) ? dto.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'") : "--";
+
+    static string RiskCls(double r) =>
+        r >= 0.9 ? "severity-critical" : r >= 0.7 ? "severity-high" : r >= 0.4 ? "severity-medium" : "severity-low";
+
+    static string SentimentCls(double s) => s >= 0.6 ? "ok" : s < 0.4 ? "err" : "warn";
+
+    static string TypeCls(string? t) => t?.ToLowerInvariant() switch
+    {
+        "aircraft" => "info",
+        "vessel" => "ok",
+        "facility" => "warn",
+        _ => ""
+    };
+
+    private sealed record SourceFacet(string Source, int Count);
+    private sealed record SourceCount(string Source, int Count);
+}

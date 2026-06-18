@@ -1,0 +1,194 @@
+@page "/admin"
+@layout AdminLayout
+@inject AdminHealthService Health
+@inject AdminStatsService Stats
+@implements IDisposable
+
+<PageTitle>Admin | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">System / Administration</div>
+            <h1 class="vi-h1">Admin Console</h1>
+            <div class="vi-sub">SYSTEM HEALTH · USERS · JOBS · CONFIGURATION</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" disabled="@_loading" @onclick="RefreshAsync">Refresh</button>
+        </div>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="vi-loading">LOADING SYSTEM STATUS</div>
+    }
+    else
+    {
+        var jobs = Health.SchedulerJobs();
+
+        <!-- Health status bar -->
+        @if (Health.Health.HasValue)
+        {
+            var cards = Health.SummaryCards();
+            <div class="vi-metrics" style="margin-bottom:16px;">
+                @foreach (var c in cards)
+                {
+                    <div class="vi-metric">
+                        <div class="vi-metric-label">@c.Label</div>
+                        <div class="vi-metric-val @ToneCls(c.Tone)">@c.Value</div>
+                        @if (!string.IsNullOrWhiteSpace(c.Detail))
+                        {
+                            <div class="vi-metric-note" style="font-size:10px;">@c.Detail[..Math.Min(c.Detail.Length, 28)]</div>
+                        }
+                    </div>
+                }
+
+                <!-- Source health quick count -->
+                @{
+                    var sources = Health.SourceRows();
+                    var downCount = sources.Count(s => s.Status is not ("ok" or "healthy"));
+                }
+                @if (sources.Any())
+                {
+                    <div class="vi-metric">
+                        <div class="vi-metric-label">Sources</div>
+                        <div class="vi-metric-val @(downCount == 0 ? "ok" : "warn")">
+                            @(sources.Count - downCount)/@sources.Count
+                        </div>
+                        <div class="vi-metric-note">@(downCount == 0 ? "all healthy" : $"{downCount} degraded")</div>
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="vi-panel" style="border-left:3px solid var(--warn);margin-bottom:16px;">
+                <div class="vi-panel-body vi-row" style="gap:8px;align-items:center;">
+                    <span class="material-symbols-outlined" style="color:var(--warn);">warning</span>
+                    <span class="vi-faint" style="font-size:13px;">Health data unavailable — .NET API or Python layer offline. Check Runtime page.</span>
+                    <a class="vi-btn sm" href="/admin/health">Health →</a>
+                </div>
+            </div>
+        }
+
+        <!-- Scheduler quick view -->
+        @if (jobs.Any())
+        {
+            <div class="vi-panel soft" style="margin-bottom:16px;">
+                <div class="vi-panel-hdr">
+                    <span class="vi-panel-title">Scheduler</span>
+                    <span class="vi-chip ok">RUNNING</span>
+                    <a class="vi-btn sm" href="/admin/jobs" style="margin-left:auto;">All jobs →</a>
+                </div>
+                <div class="vi-tbl-wrap">
+                    <table class="vi-table">
+                        <thead><tr><th>Job</th><th>Next Run</th></tr></thead>
+                        <tbody>
+                            @foreach (var j in jobs.Take(4))
+                            {
+                                <tr>
+                                    <td class="vi-td-title">@j.Name</td>
+                                    <td class="vi-td-mono vi-faint">@FmtTime(j.NextRun)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        }
+    }
+
+    <!-- Navigation cards -->
+    <div class="vi-admin-grid">
+        <a class="vi-admin-card" href="/admin/health">
+            <span class="material-symbols-outlined vi-admin-card-icon">monitor_heart</span>
+            <div class="vi-admin-card-title">System Health</div>
+            <div class="vi-admin-card-sub">Service status, latency, dependency checks</div>
+        </a>
+        <a class="vi-admin-card" href="/admin/users">
+            <span class="material-symbols-outlined vi-admin-card-icon">manage_accounts</span>
+            <div class="vi-admin-card-title">Users</div>
+            <div class="vi-admin-card-sub">Operator accounts, roles, access control</div>
+        </a>
+        <a class="vi-admin-card" href="/admin/jobs">
+            <span class="material-symbols-outlined vi-admin-card-icon">work_history</span>
+            <div class="vi-admin-card-title">Jobs</div>
+            <div class="vi-admin-card-sub">Background job queue, pipeline status</div>
+        </a>
+        <a class="vi-admin-card" href="/admin/dlq">
+            <span class="material-symbols-outlined vi-admin-card-icon">error_outline</span>
+            <div class="vi-admin-card-title">Dead-Letter Queue</div>
+            <div class="vi-admin-card-sub">Failed messages, retry, inspect payloads</div>
+        </a>
+        <a class="vi-admin-card" href="/admin/stats">
+            <span class="material-symbols-outlined vi-admin-card-icon">bar_chart</span>
+            <div class="vi-admin-card-title">System Stats</div>
+            <div class="vi-admin-card-sub">Event counts, ingestion rates, DB metrics</div>
+        </a>
+        <a class="vi-admin-card" href="/admin/queries">
+            <span class="material-symbols-outlined vi-admin-card-icon">database</span>
+            <div class="vi-admin-card-title">Queries</div>
+            <div class="vi-admin-card-sub">Scheduled and saved intelligence queries</div>
+        </a>
+        <a class="vi-admin-card" href="/admin/audit">
+            <span class="material-symbols-outlined vi-admin-card-icon">policy</span>
+            <div class="vi-admin-card-title">Audit Log</div>
+            <div class="vi-admin-card-sub">Operator actions, access history, compliance</div>
+        </a>
+        <a class="vi-admin-card" href="/admin/llm">
+            <span class="material-symbols-outlined vi-admin-card-icon">psychology</span>
+            <div class="vi-admin-card-title">LLM Config</div>
+            <div class="vi-admin-card-sub">Model providers, API keys, routing policy</div>
+        </a>
+        <a class="vi-admin-card" href="/admin/runtime">
+            <span class="material-symbols-outlined vi-admin-card-icon">memory</span>
+            <div class="vi-admin-card-title">Runtime</div>
+            <div class="vi-admin-card-sub">Pipeline topology, DB/cache/Neo4j status, swarm, data freshness</div>
+        </a>
+        <a class="vi-admin-card" href="/admin/ontology">
+            <span class="material-symbols-outlined vi-admin-card-icon">device_hub</span>
+            <div class="vi-admin-card-title">Ontology</div>
+            <div class="vi-admin-card-sub">Knowledge graph summary, Neo4j Cypher workbench</div>
+        </a>
+    </div>
+</div>
+
+@code {
+    bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.OnChanged += Refresh;
+        Stats.OnChanged  += Refresh;
+        await RefreshAsync();
+    }
+
+    async Task RefreshAsync()
+    {
+        _loading = true;
+        await Task.WhenAll(Health.LoadAsync(), Stats.LoadAsync());
+        _loading = false;
+    }
+
+    void Refresh() => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Health.OnChanged -= Refresh;
+        Stats.OnChanged  -= Refresh;
+    }
+
+    static string ToneCls(string tone) => tone switch
+    {
+        "ok"     => "ok",
+        "warn"   => "warn",
+        "danger" => "err",
+        _        => ""
+    };
+
+    static string FmtTime(string? ts)
+    {
+        if (string.IsNullOrWhiteSpace(ts) || ts == "-") return "--";
+        return ts.Length >= 16 ? ts[..16].Replace("T", " ") : ts;
+    }
+}

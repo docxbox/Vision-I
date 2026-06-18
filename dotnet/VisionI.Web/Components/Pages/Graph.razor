@@ -1,0 +1,315 @@
+@page "/graph"
+@inject GraphService Svc
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@implements IAsyncDisposable
+
+<PageTitle>Graph | Vision-I</PageTitle>
+
+<div class="vi-page" style="overflow:hidden;">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Explain / Graph</div>
+            <h1 class="vi-h1">Entity Relationship Graph</h1>
+            <div class="vi-sub">ACTOR NETWORKS · CO-OCCURRENCE · INFLUENCE MAPPING</div>
+        </div>
+        <div class="vi-page-actions">
+            <span class="vi-chip info">@Svc.NodeCount nodes</span>
+            <span class="vi-chip">@Svc.EdgeCount edges</span>
+            <button class="vi-btn" @onclick="FitGraph">Fit</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Nodes</div>
+            <div class="vi-metric-val accent">@Svc.NodeCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Edges</div>
+            <div class="vi-metric-val">@Svc.EdgeCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Visible</div>
+            <div class="vi-metric-val">@Svc.VisibleNodes.Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Source</div>
+            <div class="vi-metric-val" style="font-size:12px;">@Svc.DataSourceLabel</div>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Actor))
+    {
+        <div style="padding:4px 0 0;display:flex;gap:6px;align-items:center;">
+            <span style="font:600 11px/1 var(--mono);color:var(--tm);">FROM EVENT:</span>
+            <span class="vi-chip info">@Actor</span>
+        </div>
+    }
+
+    <!-- Filters + search bar -->
+    <div class="vi-filter-bar">
+        <select class="vi-select sm" style="width:140px;" @bind="Svc.NodeType" @bind:after="Svc.ApplyFilters">
+            <option value="">All types</option>
+            @foreach (var t in Svc.AvailableNodeTypes)
+            {
+                <option value="@t">@t</option>
+            }
+        </select>
+        <input class="vi-input sm" placeholder="Search graph…" style="width:180px;"
+               @bind="Svc.SearchTerm" @bind:event="oninput" @onkeyup="OnSearchKey" />
+        <button class="vi-btn sm" @onclick="Svc.SearchAsync">Search</button>
+        @if (Svc.SearchHits.Any())
+        {
+            <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                @foreach (var h in Svc.SearchHits.Take(6))
+                {
+                    <button class="vi-chip @(h.InCurrentGraph ? "ok" : "info")" style="cursor:pointer;"
+                            @onclick="() => Svc.SelectSearchHitAsync(h)">@h.Label</button>
+                }
+            </div>
+        }
+    </div>
+
+    <div class="vi-graph-shell" style="flex:1;min-height:0;display:flex;gap:0;">
+        <!-- Canvas -->
+        <div id="vi-graph" style="flex:1;background:var(--bg);"></div>
+
+        <!-- Side panel -->
+        <div style="width:260px;border-left:1px solid var(--bd);display:flex;flex-direction:column;overflow-y:auto;">
+            @if (Svc.Loading)
+            {
+                <div class="vi-loading" style="margin:auto;">LOADING GRAPH</div>
+            }
+            else if (Svc.SelectedNode is { } node)
+            {
+                <div class="vi-panel-hdr" style="border-bottom:1px solid var(--bd);">
+                    <span class="vi-panel-title vi-trunc">@node.Label</span>
+                    <span class="vi-chip">@node.Group</span>
+                </div>
+                <div style="padding:12px;display:flex;flex-direction:column;gap:10px;">
+                    <div class="vi-detail">
+                        @if (node.Mentions > 1)
+                        {
+                            <div class="vi-detail-row"><span class="vi-detail-key">Mentions</span><span class="vi-detail-val">@node.Mentions</span></div>
+                        }
+                        @if (node.SentimentScore.HasValue)
+                        {
+                            <div class="vi-detail-row"><span class="vi-detail-key">Sentiment</span><span class="vi-detail-val">@(node.SentimentScore.Value.ToString("0.00"))</span></div>
+                        }
+                        @if (node.Timestamp.HasValue)
+                        {
+                            <div class="vi-detail-row"><span class="vi-detail-key">Last Seen</span><span class="vi-detail-val vi-faint">@(node.Timestamp.Value.ToString("MM-dd HH:mm"))</span></div>
+                        }
+                    </div>
+
+                    @if (Svc.RelatedNodes.Any())
+                    {
+                        <div>
+                            <div class="vi-label">Related Nodes (@Svc.RelatedNodes.Count)</div>
+                            <div class="vi-stack" style="gap:3px;">
+                                @foreach (var n in Svc.RelatedNodes.Take(8))
+                                {
+                                    <div class="vi-kv">
+                                        <span class="vi-kv-key vi-trunc">@n.Label</span>
+                                        <span class="vi-chip" style="font-size:9px;">@n.Group</span>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+
+                    @if (Svc.SupportsActorExpansion(node))
+                    {
+                        <button class="vi-btn sm primary" disabled="@Svc.Expanding"
+                                @onclick="() => ExpandNodeAsync(node.Id)">
+                            @(Svc.Expanding ? "Expanding…" : "Expand Node")
+                        </button>
+                    }
+
+                    @if (Svc.LoadingNodeEvidence)
+                    {
+                        <div class="vi-loading" style="font-size:10px;">LOADING EVIDENCE</div>
+                    }
+                    else if (Svc.SelectedNodeEvidence is { } ev)
+                    {
+                        @if (ev.EntityDetail is { } ent)
+                        {
+                            <div>
+                                <div class="vi-label">Entity Detail</div>
+                                <div class="vi-detail">
+                                    <div class="vi-detail-row"><span class="vi-detail-key">Events</span><span class="vi-detail-val">@ent.EventCount</span></div>
+                                    <div class="vi-detail-row"><span class="vi-detail-key">Influence</span><span class="vi-detail-val">@(ent.Influence.ToString("0.00"))</span></div>
+                                </div>
+                            </div>
+                        }
+                        @if (ev.LinkedSituations.Any())
+                        {
+                            <div>
+                                <div class="vi-label">Linked Situations</div>
+                                <div class="vi-tags">
+                                    @foreach (var s in ev.LinkedSituations.Take(4))
+                                    {
+                                        <span class="vi-chip warn">@(s.Title ?? s.SituationId)</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    }
+
+                    <!-- Navigation links -->
+                    <div style="display:flex;flex-direction:column;gap:4px;">
+                        @if (Svc.SupportsEntityProfile(node))
+                        {
+                            <button class="vi-btn sm primary" @onclick="() => OpenEntityAsync(node.Id)">Open Entity Profile</button>
+                        }
+                        <a class="vi-btn sm" href="/live-events?search=@Uri.EscapeDataString(node.Label)">Events →</a>
+                        <a class="vi-btn sm" href="/operations">Operations →</a>
+                    </div>
+
+                    <button class="vi-btn sm" @onclick="Svc.ClearSelection">Clear</button>
+                </div>
+            }
+            else if (!Svc.Loading && Svc.NodeCount == 0)
+            {
+                <div style="padding:16px;display:flex;flex-direction:column;gap:10px;">
+                    <div class="vi-panel" style="border-left:2px solid var(--warn);padding:8px;">
+                        <div class="vi-label warn" style="margin-bottom:3px;">Graph unavailable</div>
+                        <div class="vi-faint" style="font-size:11px;">Neo4j may be offline or the knowledge graph has not been populated yet. Run an ingest job to build entity data.</div>
+                    </div>
+                    <a class="vi-btn sm" href="/ingest">Ingest →</a>
+                    <a class="vi-btn sm" href="/admin/runtime">Runtime →</a>
+                </div>
+            }
+            else
+            {
+                <div class="vi-empty" style="margin:auto;">
+                    <span class="material-symbols-outlined">hub</span>
+                    Click a node to inspect
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter][SupplyParameterFromQuery(Name = "entity")] public string? EntityId { get; set; }
+    [Parameter][SupplyParameterFromQuery(Name = "actor")] public string? Actor { get; set; }
+
+    private DotNetObjectReference<Graph>? _ref;
+    private bool _graphReady;
+    private bool _disposed;
+
+    protected override void OnInitialized()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        Svc.OnGraphReady += OnGraphReady;
+        Svc.OnNodesExpanded += OnNodesExpanded;
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _ref = DotNetObjectReference.Create(this);
+            var requestedEntityId = EntityId;
+            if (string.IsNullOrWhiteSpace(requestedEntityId) && !string.IsNullOrWhiteSpace(Actor))
+                requestedEntityId = ActorToGraphId(Actor);
+
+            if (!string.IsNullOrWhiteSpace(Actor))
+                Svc.SearchTerm = Actor;
+            await Svc.LoadAsync(null, requestedEntityId);
+            if (!string.IsNullOrWhiteSpace(Actor))
+                await Svc.SearchAsync();
+        }
+        if (_graphReady)
+        {
+            _graphReady = false;
+            var nodes = Svc.VisibleNodes.Select(n => new { id = n.Id, label = n.Label, group = n.Group, value = n.Mentions }).ToArray();
+            var edges = Svc.VisibleEdges.Select(e => new { from = e.From, to = e.To, label = e.Relation }).ToArray();
+            await JS.InvokeVoidAsync("viGraph.render", "vi-graph", nodes, edges, _ref);
+        }
+    }
+
+    void OnGraphReady()
+    {
+        _graphReady = true;
+        InvokeAsync(StateHasChanged);
+    }
+
+    void OnNodesExpanded(List<GraphNodeVm> nodes, List<GraphEdgeVm> edges)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            try
+            {
+                var n = nodes.Select(n => new { id = n.Id, label = n.Label, group = n.Group, value = n.Mentions }).ToArray();
+                var e = edges.Select(e => new { from = e.From, to = e.To, label = e.Relation }).ToArray();
+                await JS.InvokeVoidAsync("viGraph.expandNodes", n, e);
+                StateHasChanged();
+            }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
+        });
+    }
+
+    async Task ExpandNodeAsync(string nodeId)
+    {
+        await Svc.ExpandNodeAsync(nodeId);
+    }
+
+    async Task OpenEntityAsync(string nodeId)
+    {
+        var mappedId = await Svc.EnsureEntityMappedAsync(nodeId);
+        if (!string.IsNullOrWhiteSpace(mappedId))
+            Nav.NavigateTo($"/entities/{Uri.EscapeDataString(mappedId)}");
+    }
+
+    async Task OnSearchKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await Svc.SearchAsync();
+    }
+
+    async Task FitGraph() => await JS.InvokeVoidAsync("viGraph.fit");
+
+    [JSInvokable]
+    public void OnNodeSelected(string nodeId) => Svc.SelectNode(nodeId);
+
+    [JSInvokable]
+    public async Task OnNodeDoubleClick(string nodeId)
+    {
+        if (Svc.SupportsEntityProfile(nodeId))
+        {
+            await OpenEntityAsync(nodeId);
+            return;
+        }
+
+        await Svc.ExpandNodeAsync(nodeId);
+    }
+
+    [JSInvokable]
+    public void OnNodeDeselected() => Svc.ClearSelection();
+
+    private static string ActorToGraphId(string actor)
+    {
+        var normalized = Uri.UnescapeDataString(actor)
+            .Trim()
+            .ToLowerInvariant()
+            .Replace("actor:", "")
+            .Replace(" ", "_");
+        return $"actor:{normalized}";
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        Svc.OnChanged -= OnSvcChanged;
+        Svc.OnGraphReady -= OnGraphReady;
+        Svc.OnNodesExpanded -= OnNodesExpanded;
+        _ref?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

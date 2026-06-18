@@ -1,0 +1,324 @@
+@inject WorkspaceService WorkspaceSvc
+@inject ApiService Api
+@inject ToastService Toast
+@inject IJSRuntime JS
+@using System.Net
+@using System.Text
+@using System.Text.Json
+
+<div class="vi-page-actions" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+    <span class="vi-kicker" style="margin:0;align-self:center;">Workspace Report</span>
+    <span class="vi-chip info">@_evidence.Count evidence · @(Developments?.Events.Count ?? 0) developments</span>
+    <button class="vi-btn sm" style="margin-left:auto;" disabled="@_loading" @onclick="LoadEvidenceAsync">
+        <span class="material-symbols-outlined" style="font-size:13px;vertical-align:middle;">refresh</span> Reload
+    </button>
+    <button class="vi-btn sm" @onclick="CopyMarkdownAsync">
+        <span class="material-symbols-outlined" style="font-size:13px;vertical-align:middle;">content_copy</span> Copy Markdown
+    </button>
+    <button class="vi-btn sm" @onclick="ExportWordAsync">
+        <span class="material-symbols-outlined" style="font-size:13px;vertical-align:middle;">description</span> Export Word
+    </button>
+    <button class="vi-btn primary sm" @onclick="ExportPdfAsync">
+        <span class="material-symbols-outlined" style="font-size:13px;vertical-align:middle;">picture_as_pdf</span> Generate PDF
+    </button>
+</div>
+
+<section class="vi-panel">
+    <div class="vi-panel-hdr">
+        <span class="vi-panel-title">@Title</span>
+        <span class="vi-chip">@DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm 'UTC'")</span>
+    </div>
+    <div class="vi-panel-body vi-stack" style="gap:16px;">
+        <div style="border:1px solid var(--bd);border-radius:14px;padding:14px;background:linear-gradient(135deg,rgba(139,92,246,.12),rgba(14,165,233,.05));">
+            <div class="vi-kicker" style="margin-bottom:8px;">@(Detail?.Classification ?? "UNCLASSIFIED") · @WindowLabel window</div>
+            <h2 style="margin:0 0 8px;font-size:22px;color:var(--t);">@Title</h2>
+            <p style="margin:0;color:var(--t2);line-height:1.65;">@ExecutiveSummary</p>
+        </div>
+
+        <ReportSection Title="Key Judgments">
+            <ul class="vi-report-list">
+                @foreach (var line in KeyJudgments) { <li>@line</li> }
+            </ul>
+        </ReportSection>
+
+        <ReportSection Title="@($"Pinned Evidence ({_evidence.Count})")">
+            @if (_evidence.Count == 0)
+            {
+                <div class="vi-empty" style="padding:16px;">No evidence pinned. Pin items from Developments, Entities, or Assets to anchor this report.</div>
+            }
+            else
+            {
+                <div class="vi-stack" style="gap:8px;">
+                    @foreach (var ev in _evidence)
+                    {
+                        <div style="border:1px solid var(--bd);border-radius:10px;padding:10px;">
+                            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:3px;">
+                                <span class="vi-chip">@ev.ItemType.ToUpperInvariant()</span>
+                                @if (!string.IsNullOrWhiteSpace(ev.Source)) { <span class="vi-chip info">@ev.Source</span> }
+                            </div>
+                            <div style="font-size:13px;color:var(--t);font-weight:500;">@ev.Title</div>
+                            @if (!string.IsNullOrWhiteSpace(ev.Note)) { <div style="font-size:11px;color:var(--t2);margin-top:4px;">@ev.Note</div> }
+                            @{ var prov = ProvenanceFor(ev); }
+                            @if (prov.Count > 0)
+                            {
+                                <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin-top:6px;">
+                                    <span class="vi-kicker" style="margin:0;">Sources</span>
+                                    @foreach (var s in prov.Take(6))
+                                    {
+                                        <span class="vi-chip" style="font-size:10px;">@s</span>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </ReportSection>
+
+        <ReportSection Title="Priority Developments">
+            @if (TopEvents.Count == 0)
+            {
+                <div class="vi-empty" style="padding:16px;">No developments in the current window.</div>
+            }
+            else
+            {
+                <div class="vi-stack" style="gap:6px;">
+                    @foreach (var e in TopEvents)
+                    {
+                        <div style="display:flex;justify-content:space-between;gap:8px;border:1px solid var(--bd);border-radius:10px;padding:9px 11px;">
+                            <div style="min-width:0;">
+                                <div style="font-size:12px;color:var(--t);">@e.Title</div>
+                                <div class="vi-kicker" style="margin-top:3px;">@e.Source @(string.IsNullOrWhiteSpace(e.EventType) ? "" : $"· {e.EventType}")</div>
+                            </div>
+                            <span class="vi-chip @RiskCls(e.RiskScore ?? 0)">@((e.RiskScore ?? 0).ToString("0.00"))</span>
+                        </div>
+                    }
+                </div>
+            }
+        </ReportSection>
+
+        @if (Entities?.EntityItems.Count > 0)
+        {
+            <ReportSection Title="Key Actors & Entities">
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                    @foreach (var en in Entities.EntityItems.Take(20))
+                    {
+                        <span class="vi-chip">@en.Name <span style="opacity:.6;">@en.Count</span></span>
+                    }
+                </div>
+            </ReportSection>
+        }
+
+        @if (Correlation?.Narratives.Count > 0)
+        {
+            <ReportSection Title="Narratives & Correlation">
+                <div class="vi-stack" style="gap:4px;">
+                    @foreach (var n in Correlation.Narratives.Take(12))
+                    {
+                        <div style="font-size:12px;color:var(--t2);">@n.Source <span style="opacity:.6;">@n.Rel</span> @n.Target</div>
+                    }
+                </div>
+            </ReportSection>
+        }
+    </div>
+</section>
+
+@code {
+    [Parameter] public string Slug { get; set; } = "";
+    [Parameter] public WorkspaceDetailModel? Detail { get; set; }
+    [Parameter] public WorkspaceOverview? Overview { get; set; }
+    [Parameter] public WorkspaceDevelopments? Developments { get; set; }
+    [Parameter] public WorkspaceEntities? Entities { get; set; }
+    [Parameter] public WorkspaceAssets? Assets { get; set; }
+    [Parameter] public WorkspaceCorrelation? Correlation { get; set; }
+
+    List<WorkspaceEvidenceItem> _evidence = new();
+    bool _loading;
+
+    protected override async Task OnInitializedAsync() => await LoadEvidenceAsync();
+
+    // Provenance per pinned evidence item: where the object came from (sources).
+    readonly Dictionary<Guid, List<string>> _provenance = new();
+
+    async Task LoadEvidenceAsync()
+    {
+        _loading = true;
+        try
+        {
+            _evidence = (await WorkspaceSvc.GetEvidenceAsync(Slug))?.Items ?? new();
+            await LoadProvenanceAsync();
+        }
+        catch (Exception ex) { Toast.ShowError($"Failed to load evidence: {ex.Message}"); }
+        finally { _loading = false; }
+    }
+
+    // Pull lineage for each pinned object from the unified ontology read-model.
+    async Task LoadProvenanceAsync()
+    {
+        _provenance.Clear();
+        foreach (var ev in _evidence.Where(e => e.ItemType is "event" or "actor" or "asset").Take(12))
+        {
+            try
+            {
+                var lin = await Api.GetObjectLineageAsync(ev.ItemType, ev.ItemId);
+                var sources = ParseSources(lin);
+                if (sources.Count > 0) _provenance[ev.Id] = sources;
+            }
+            catch { /* provenance is best-effort */ }
+        }
+    }
+
+    static List<string> ParseSources(JsonElement? lin)
+    {
+        var list = new List<string>();
+        if (lin is null || lin.Value.ValueKind != JsonValueKind.Object) return list;
+        if (lin.Value.TryGetProperty("sources", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var s in arr.EnumerateArray())
+            {
+                var src = s.TryGetProperty("source", out var sp) ? sp.GetString() : null;
+                var refv = s.TryGetProperty("ref", out var rp) ? rp.GetString() : null;
+                if (string.IsNullOrWhiteSpace(src) && string.IsNullOrWhiteSpace(refv)) continue;
+                list.Add(string.IsNullOrWhiteSpace(refv) ? src! : $"{src}:{refv}");
+            }
+        }
+        return list;
+    }
+
+    List<string> ProvenanceFor(WorkspaceEvidenceItem ev)
+        => _provenance.TryGetValue(ev.Id, out var s) ? s : new();
+
+    string Title => $"Intelligence Report — {Detail?.Title ?? Slug}";
+    string WindowLabel => (Detail?.DefaultWindowHours ?? 24) switch { <= 24 => "24h", <= 72 => "72h", <= 168 => "7d", _ => "30d" };
+
+    List<WorkspaceEventItem> TopEvents => (Developments?.Events ?? Overview?.TopEvents ?? new())
+        .OrderByDescending(e => e.RiskScore ?? 0)
+        .Take(15).ToList();
+
+    int HighRisk => TopEvents.Count(e => (e.RiskScore ?? 0) >= 0.7);
+    double MaxRisk => Overview?.MaxRiskScore ?? Developments?.MaxRiskScore ?? TopEvents.Select(e => e.RiskScore ?? 0).DefaultIfEmpty(0).Max();
+
+    string ExecutiveSummary
+    {
+        get
+        {
+            var evCount = Developments?.EventCount ?? Overview?.EventCount ?? TopEvents.Count;
+            var assets  = Assets?.TotalAssets ?? Overview?.AssetCount ?? 0;
+            var anomalies = Assets?.AnomalyCount ?? Overview?.AnomalyDelta ?? 0;
+            var actor = Overview?.TopActor ?? Entities?.EntityItems.FirstOrDefault()?.Name;
+            return $"This report covers {Detail?.Title ?? Slug} over the {WindowLabel} window. " +
+                   $"{evCount} development(s) were observed (max risk {MaxRisk:0.00}, {HighRisk} high-risk), " +
+                   $"alongside {assets} tracked asset(s) with {anomalies} anomaly(ies). " +
+                   $"{_evidence.Count} item(s) have been pinned as curated evidence" +
+                   (actor is null ? "." : $", with {actor} as the leading entity anchor.");
+        }
+    }
+
+    IEnumerable<string> KeyJudgments
+    {
+        get
+        {
+            yield return $"{TopEvents.Count} priority development(s) selected for the {WindowLabel} window; {HighRisk} are high risk (≥0.70).";
+            if (_evidence.Count > 0)
+                yield return $"{_evidence.Count} curated evidence item(s) anchor the assessment.";
+            if ((Assets?.AnomalyCount ?? 0) > 0)
+                yield return $"{Assets!.AnomalyCount} asset anomaly(ies) present — verify kinematic/nav state mismatches.";
+            if (Correlation?.Narratives.Count > 0)
+                yield return $"{Correlation.Narratives.Count} narrative link(s) detected across the correlation graph.";
+            yield return "Analyst should validate source provenance for each pinned item before dissemination.";
+        }
+    }
+
+    async Task ExportPdfAsync()
+    {
+        await JS.InvokeVoidAsync("viReports.printHtml", BuildHtml());
+        Toast.ShowSuccess("Report opened — choose Save as PDF in the print dialog.");
+    }
+
+    async Task ExportWordAsync()
+    {
+        await JS.InvokeVoidAsync("viReports.downloadWord", SafeFile(Title) + ".doc", BuildHtml());
+        Toast.ShowSuccess("Word-compatible report downloaded.");
+    }
+
+    async Task CopyMarkdownAsync()
+    {
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", BuildMarkdown());
+        Toast.ShowSuccess("Report markdown copied.");
+    }
+
+    string BuildMarkdown()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"# {Title}");
+        sb.AppendLine($"\n_{Detail?.Classification ?? "UNCLASSIFIED"} · {WindowLabel} window · Generated {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC_\n");
+        sb.AppendLine("## Executive Summary\n" + ExecutiveSummary + "\n");
+        sb.AppendLine("## Key Judgments");
+        foreach (var l in KeyJudgments) sb.AppendLine($"- {l}");
+        sb.AppendLine($"\n## Pinned Evidence ({_evidence.Count})");
+        foreach (var e in _evidence)
+        {
+            var prov = ProvenanceFor(e);
+            sb.AppendLine($"- **[{e.ItemType}]** {e.Title}{(string.IsNullOrWhiteSpace(e.Source) ? "" : $" ({e.Source})")}{(prov.Count > 0 ? $" — sources: {string.Join(", ", prov)}" : "")}{(string.IsNullOrWhiteSpace(e.Note) ? "" : $" — {e.Note}")}");
+        }
+        sb.AppendLine("\n## Priority Developments");
+        foreach (var e in TopEvents) sb.AppendLine($"- [{(e.RiskScore ?? 0):0.00}] {e.Title} ({e.Source})");
+        return sb.ToString();
+    }
+
+    string BuildHtml()
+    {
+        var sb = new StringBuilder();
+        sb.Append(@"<!doctype html><html><head><meta charset=""utf-8""><style>
+body{font-family:Calibri,Arial,sans-serif;color:#111827;margin:38px;line-height:1.45}
+h1{font-size:25px;margin:0} h2{font-size:16px;margin-top:22px;border-bottom:1px solid #d1d5db;padding-bottom:5px}
+.meta{font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.08em;margin-top:4px}
+.summary{border:1px solid #d1d5db;background:#f8fafc;padding:14px;margin:16px 0;border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:10.5px;margin-top:6px}th,td{border:1px solid #d1d5db;padding:6px;text-align:left;vertical-align:top}th{background:#111827;color:#fff}
+li{margin-bottom:5px}.small{font-size:10px;color:#6b7280}</style></head><body>");
+        sb.Append($"<h1>{H(Title)}</h1>");
+        sb.Append($"<div class=\"meta\">Vision-I Workspace Report · {H(Detail?.Classification ?? "UNCLASSIFIED")} · {WindowLabel} window · Generated {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC</div>");
+        sb.Append($"<div class=\"summary\"><strong>Executive Summary</strong><br>{H(ExecutiveSummary)}</div>");
+        sb.Append("<h2>Key Judgments</h2><ul>");
+        foreach (var l in KeyJudgments) sb.Append($"<li>{H(l)}</li>");
+        sb.Append("</ul>");
+
+        sb.Append($"<h2>Pinned Evidence ({_evidence.Count})</h2>");
+        if (_evidence.Count == 0) sb.Append("<p class=\"small\">No evidence pinned.</p>");
+        else
+        {
+            sb.Append("<table><thead><tr><th>Type</th><th>Title</th><th>Source</th><th>Provenance</th><th>Note</th></tr></thead><tbody>");
+            foreach (var e in _evidence)
+                sb.Append($"<tr><td>{H(e.ItemType)}</td><td>{H(e.Title)}</td><td>{H(e.Source)}</td><td>{H(string.Join(", ", ProvenanceFor(e)))}</td><td>{H(e.Note)}</td></tr>");
+            sb.Append("</tbody></table>");
+        }
+
+        sb.Append("<h2>Priority Developments</h2><table><thead><tr><th>Risk</th><th>Title</th><th>Source</th><th>Type</th></tr></thead><tbody>");
+        foreach (var e in TopEvents)
+            sb.Append($"<tr><td>{(e.RiskScore ?? 0):0.00}</td><td>{H(e.Title)}</td><td>{H(e.Source)}</td><td>{H(e.EventType)}</td></tr>");
+        sb.Append("</tbody></table>");
+
+        if (Entities?.EntityItems.Count > 0)
+        {
+            sb.Append("<h2>Key Actors & Entities</h2><table><thead><tr><th>Name</th><th>Type</th><th>Mentions</th></tr></thead><tbody>");
+            foreach (var en in Entities.EntityItems.Take(25))
+                sb.Append($"<tr><td>{H(en.Name)}</td><td>{H(en.EntityType)}</td><td>{en.Count}</td></tr>");
+            sb.Append("</tbody></table>");
+        }
+
+        if (Correlation?.Narratives.Count > 0)
+        {
+            sb.Append("<h2>Narratives & Correlation</h2><ul>");
+            foreach (var n in Correlation.Narratives.Take(15))
+                sb.Append($"<li>{H(n.Source)} <em>{H(n.Rel)}</em> {H(n.Target)}</li>");
+            sb.Append("</ul>");
+        }
+
+        sb.Append("<p class=\"small\">Generated by Vision-I workspace reporting. Validate source provenance before dissemination.</p></body></html>");
+        return sb.ToString();
+    }
+
+    static string RiskCls(double r) => r >= 0.7 ? "err" : r >= 0.4 ? "warn" : "";
+    static string H(string? v) => WebUtility.HtmlEncode(v ?? "");
+    static string SafeFile(string v) => string.Concat(v.Select(c => char.IsLetterOrDigit(c) ? c : '-')).Trim('-').ToLowerInvariant();
+}

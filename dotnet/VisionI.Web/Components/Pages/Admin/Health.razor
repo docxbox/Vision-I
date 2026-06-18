@@ -1,0 +1,126 @@
+@page "/admin/health"
+@layout AdminLayout
+@inject AdminHealthService Svc
+@implements IDisposable
+
+<PageTitle>Health | Vision-I Admin</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Admin / System</div>
+            <h1 class="vi-h1">System Health</h1>
+            <div class="vi-sub">SERVICES · SCHEDULER · SOURCES · TOPOLOGY</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" @onclick="Svc.LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    @if (Svc.Health.HasValue)
+    {
+        <!-- Summary cards -->
+        <div class="vi-metrics">
+            @foreach (var c in Svc.SummaryCards())
+            {
+                <div class="vi-metric">
+                    <div class="vi-metric-label">@c.Label</div>
+                    <div class="vi-metric-val @c.Tone">@c.Value</div>
+                    @if (!string.IsNullOrWhiteSpace(c.Detail))
+                    {
+                        <div class="vi-faint" style="font-size:10px;margin-top:2px;">@c.Detail</div>
+                    }
+                </div>
+            }
+        </div>
+
+        <div class="vi-split" style="flex:1;min-height:0;">
+            <div class="vi-stack" style="min-height:0;overflow-y:auto;">
+                <!-- Services -->
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Service Status</span></div>
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead><tr><th>Service</th><th>State</th></tr></thead>
+                            <tbody>
+                                @foreach (var s in Svc.ServiceStatuses())
+                                {
+                                    <tr>
+                                        <td class="vi-td-mono">@s.Label</td>
+                                        <td><span class="vi-chip @(s.Enabled ? "ok" : "err")">@(s.Enabled ? "ENABLED" : "DISABLED")</span></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Scheduler -->
+                @if (Svc.SchedulerJobs().Any())
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Scheduler Jobs</span></div>
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead><tr><th>Job</th><th>ID</th><th>Next Run</th></tr></thead>
+                                <tbody>
+                                    @foreach (var j in Svc.SchedulerJobs())
+                                    {
+                                        <tr>
+                                            <td class="vi-td-title">@j.Name</td>
+                                            <td class="vi-td-mono vi-faint">@j.Id</td>
+                                            <td class="vi-td-mono">@j.NextRun</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <!-- Sources -->
+            <div class="vi-panel soft">
+                <div class="vi-panel-hdr"><span class="vi-panel-title">Source Health</span></div>
+                @if (!Svc.SourceRows().Any())
+                {
+                    <div class="vi-empty">No source data</div>
+                }
+                else
+                {
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead><tr><th>Source</th><th>Status</th><th>Circuit</th><th>Detail</th></tr></thead>
+                            <tbody>
+                                @foreach (var s in Svc.SourceRows())
+                                {
+                                    <tr>
+                                        <td class="vi-td-title">@s.Name</td>
+                                        <td><span class="vi-chip @AdminHealthService.ToneFor(s.Status)">@s.Status.ToUpperInvariant()</span></td>
+                                        <td class="vi-td-mono">@s.Circuit</td>
+                                        <td class="vi-td-note vi-trunc" style="max-width:200px;">@s.Detail</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="vi-loading">LOADING HEALTH DATA</div>
+    }
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+}

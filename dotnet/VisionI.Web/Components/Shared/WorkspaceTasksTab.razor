@@ -1,0 +1,242 @@
+@inject ApiService Api
+@inject ToastService Toast
+@inject AuthService Auth
+
+<div class="vi-stack">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div class="vi-label">Action Tasks</div>
+        <button class="vi-btn sm primary" @onclick="ShowNew">+ New Task</button>
+    </div>
+
+    @if (Actions?.ActionItems?.Any() == true)
+    {
+        var recommended = Actions.ActionItems
+            .Where(a => !_tasks.Any(t => string.Equals(t.Title, a.Title, StringComparison.OrdinalIgnoreCase)))
+            .Take(4)
+            .ToList();
+        @if (recommended.Any())
+        {
+            <div class="vi-panel" style="padding:14px 16px;margin-bottom:12px;border-left:3px solid var(--accent);">
+                <div class="vi-panel-hdr" style="padding:0 0 10px 0;border-bottom:1px solid var(--bd);">
+                    <span class="material-symbols-outlined" style="font-size:15px;color:var(--acc);">auto_awesome</span>
+                    <span class="vi-panel-title">Recommended From Actions</span>
+                    <span class="vi-chip">@recommended.Count READY</span>
+                </div>
+                <div class="vi-stack" style="gap:8px;">
+                    @foreach (var action in recommended)
+                    {
+                        <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;border-bottom:1px solid var(--bd);padding-bottom:8px;">
+                            <div style="min-width:0;">
+                                <div class="vi-td-title vi-trunc">@action.Title</div>
+                                <div class="vi-td-note vi-trunc" style="max-width:760px;">@action.Rationale</div>
+                            </div>
+                            <button class="vi-btn sm" disabled="@_saving" @onclick="() => CreateFromActionAsync(action)">
+                                Create task
+                            </button>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    }
+
+    @if (_newOpen)
+    {
+        <div class="vi-panel" style="padding:14px 16px;margin-bottom:12px;">
+            <div class="vi-stack" style="gap:8px;">
+                <input class="vi-input sm" placeholder="Task title…" @bind="_newTitle" />
+                <input class="vi-input sm" placeholder="Description (optional)…" @bind="_newDesc" />
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <select class="vi-select sm" @bind="_newPriority">
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                    </select>
+                    <button class="vi-btn sm primary" disabled="@_saving" @onclick="SaveNew">
+                        @(_saving ? "…" : "Create")
+                    </button>
+                    <button class="vi-btn sm" @onclick="HideNew">Cancel</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_loading)
+    {
+        <div class="vi-loading">LOADING TASKS</div>
+    }
+    else if (!_tasks.Any())
+    {
+        <div class="vi-empty" style="padding:24px;">
+            <span class="material-symbols-outlined">task_alt</span>
+            No tasks yet. Create one to track analyst actions.
+        </div>
+    }
+    else
+    {
+        <div class="vi-tbl-wrap">
+            <table class="vi-table">
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>Priority</th>
+                        <th>Status</th>
+                        <th>Assigned To</th>
+                        <th>Created</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var t in _tasks)
+                    {
+                        <tr>
+                            <td>
+                                <div class="vi-td-title">@t.Title</div>
+                                @if (!string.IsNullOrWhiteSpace(t.Description))
+                                {
+                                    <div class="vi-td-note vi-trunc" style="max-width:220px;">@t.Description</div>
+                                }
+                            </td>
+                            <td><span class="vi-chip @PriorityCls(t.Priority)">@t.Priority.ToUpperInvariant()</span></td>
+                            <td>
+                                <select class="vi-select sm" style="width:110px;" value="@t.Status"
+                                        @onchange="e => UpdateStatusAsync(t, e.Value?.ToString() ?? t.Status)">
+                                    <option value="open">OPEN</option>
+                                    <option value="in_progress">IN PROGRESS</option>
+                                    <option value="done">DONE</option>
+                                    <option value="cancelled">CANCELLED</option>
+                                </select>
+                            </td>
+                            <td class="vi-td-mono vi-faint">@(t.AssigneeDisplayName ?? t.AssigneeUserId ?? "—")</td>
+                            <td class="vi-td-mono vi-faint">@Fmt(t.CreatedAt)</td>
+                            <td>
+                                <button class="vi-btn sm" style="color:var(--err);"
+                                        @onclick="() => DeleteAsync(t.Id)">✕</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Slug { get; set; } = "";
+    [Parameter] public WorkspaceActions? Actions { get; set; }
+
+    bool _loading, _newOpen, _saving;
+    string _newTitle = "", _newDesc = "", _newPriority = "medium";
+    List<TaskItem> _tasks = new();
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var resp = await Api.GetAsync<TasksResponse>($"api/workspaces/{Uri.EscapeDataString(Slug)}/tasks");
+            _tasks = resp?.Tasks ?? new();
+        }
+        catch { _tasks = new(); }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    void ShowNew() { _newOpen = true; _newTitle = ""; _newDesc = ""; _newPriority = "medium"; }
+    void HideNew() => _newOpen = false;
+
+    async Task SaveNew()
+    {
+        if (string.IsNullOrWhiteSpace(_newTitle)) return;
+        _saving = true;
+        try
+        {
+            await Api.PostAsync<object>($"api/workspaces/{Uri.EscapeDataString(Slug)}/tasks",
+                new { title = _newTitle, description = _newDesc, priority = _newPriority });
+            Toast.ShowSuccess("Task created.");
+            _newOpen = false;
+            await LoadAsync();
+        }
+        catch { Toast.ShowError("Failed to create task."); }
+        finally { _saving = false; }
+    }
+
+    async Task CreateFromActionAsync(WorkspaceAction action)
+    {
+        if (_saving) return;
+        _saving = true;
+        try
+        {
+            await Api.PostAsync<object>($"api/workspaces/{Uri.EscapeDataString(Slug)}/tasks",
+                new {
+                    title = action.Title,
+                    description = $"{action.Rationale}\n\nEvidence: {string.Join(", ", action.EvidenceEventIds.Take(5))}",
+                    priority = action.Priority
+                });
+            Toast.ShowSuccess("Task created from action.");
+            await LoadAsync();
+        }
+        catch { Toast.ShowError("Failed to create action task."); }
+        finally { _saving = false; }
+    }
+
+    async Task UpdateStatusAsync(TaskItem t, string newStatus)
+    {
+        t.Status = newStatus;
+        try
+        {
+            await Api.PatchAsync<object>($"api/workspaces/{Uri.EscapeDataString(Slug)}/tasks/{t.Id}",
+                new { status = newStatus });
+        }
+        catch { Toast.ShowError("Failed to update task."); }
+    }
+
+    async Task DeleteAsync(Guid id)
+    {
+        await Api.DeleteAsync($"api/workspaces/{Uri.EscapeDataString(Slug)}/tasks/{id}");
+        _tasks.RemoveAll(t => t.Id == id);
+        StateHasChanged();
+    }
+
+    static string PriorityCls(string? p) => p?.ToLower() switch
+    {
+        "critical" => "severity-critical", "high" => "severity-high",
+        "medium" => "severity-medium", _ => "severity-low",
+    };
+
+    static string Fmt(string? raw)
+    {
+        if (!DateTimeOffset.TryParse(raw, out var dto)) return "--";
+        return (DateTimeOffset.UtcNow - dto.ToUniversalTime()).TotalDays < 1
+            ? $"{(int)(DateTimeOffset.UtcNow - dto.ToUniversalTime()).TotalHours}h ago"
+            : dto.ToString("MMM d");
+    }
+
+    class TaskItem
+    {
+        public Guid    Id { get; set; }
+        public string  Title { get; set; } = "";
+        public string? Description { get; set; }
+        public string  Status { get; set; } = "open";
+        public string  Priority { get; set; } = "medium";
+        public string? AssigneeUserId { get; set; }
+        public string? AssigneeDisplayName { get; set; }
+        public string? CreatedAt { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("created_at")]
+        public string? CreatedAtJson { set => CreatedAt = value; get => CreatedAt; }
+        [System.Text.Json.Serialization.JsonPropertyName("assignee_display_name")]
+        public string? AssigneeDisplayNameJson { set => AssigneeDisplayName = value; get => AssigneeDisplayName; }
+        [System.Text.Json.Serialization.JsonPropertyName("assignee_user_id")]
+        public string? AssigneeUserIdJson { set => AssigneeUserId = value; get => AssigneeUserId; }
+    }
+
+    class TasksResponse
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("tasks")]
+        public List<TaskItem> Tasks { get; set; } = new();
+    }
+}

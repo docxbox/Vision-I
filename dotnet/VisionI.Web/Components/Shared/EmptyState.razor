@@ -1,0 +1,12 @@
+<div class="vi-empty">
+    @if (!string.IsNullOrEmpty(Icon))
+    {
+        <span class="material-symbols-outlined">@Icon</span>
+    }
+    @Message
+</div>
+
+@code {
+    [Parameter] public string  Message { get; set; } = "No data available.";
+    [Parameter] public string? Icon    { get; set; }
+}

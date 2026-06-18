@@ -1,0 +1,31 @@
+<div class="vi-page-hdr">
+    <div>
+        <div class="vi-kicker">
+            <button class="vi-btn sm" style="padding:0;background:none;border:none;color:var(--tm);"
+                    @onclick="OnBack">Workspaces</button>
+            <span style="color:var(--tf);margin:0 4px;">/</span>@Title
+        </div>
+        <h1 class="vi-h1">@Title</h1>
+        @if (!string.IsNullOrEmpty(Description))
+        {
+            <div class="vi-sub">@Description</div>
+        }
+    </div>
+    <div class="vi-page-actions">
+        <div class="vi-chip @(Status == "active" ? "ok" : "warn")">@Status.ToUpper()</div>
+        @if (!string.IsNullOrEmpty(Classification))
+        {
+            <div class="vi-chip info">@Classification</div>
+        }
+        @ChildContent
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Title         { get; set; } = "";
+    [Parameter] public string? Description  { get; set; }
+    [Parameter] public string Status        { get; set; } = "active";
+    [Parameter] public string? Classification { get; set; }
+    [Parameter] public EventCallback    OnBack       { get; set; }
+    [Parameter] public RenderFragment?  ChildContent { get; set; }
+}

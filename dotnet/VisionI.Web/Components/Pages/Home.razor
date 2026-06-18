@@ -1,0 +1,396 @@
+@page "/dashboard"
+@page "/"
+@layout AnalystLayout
+@inject HomeService Svc
+@inject StreamsService Streams
+@inject WorkspaceService WorkspaceSvc
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>Mission Control | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Vision-I / Mission Control</div>
+            <h1 class="vi-h1">Mission Control</h1>
+            <div class="vi-sub">ACTIVE SURVEILLANCE · @DateTime.UtcNow.ToString("dd MMM yyyy HH:mm") UTC</div>
+        </div>
+        <div class="vi-page-actions">
+            <div class="vi-tab-grp">
+                @foreach (var w in HomeService.TimeWindows)
+                {
+                    <button class="vi-tab-btn @(Svc.TimeWindow == w ? "active" : "")"
+                            @onclick="() => Svc.SetWindowAsync(w)">@w</button>
+                }
+            </div>
+            <button class="vi-btn" disabled="@_wsLoading" @onclick="RefreshAsync">
+                <span class="material-symbols-outlined" style="font-size:15px;">refresh</span>
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    @if (Streams.IsWarming)
+    {
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.2);border-radius:6px;margin-bottom:12px;font-size:12px;color:var(--warn);">
+            <span class="material-symbols-outlined" style="font-size:16px;">hourglass_top</span>
+            Live stream cache is warming — event feed may be empty. Data will populate after the next ingest cycle.
+        </div>
+    }
+
+    <!-- MC-1: Priority Workspace Card -->
+    @if (_priorityWorkspace is not null)
+    {
+        var risk = _priorityOverview?.MaxRiskScore ?? 0;
+        var riskCls = risk > 0.7 ? "err" : risk > 0.4 ? "warn" : "ok";
+        var riskLbl = risk > 0.7 ? "HIGH RISK" : risk > 0.4 ? "ELEVATED" : "NOMINAL";
+
+        <div style="margin-bottom:16px;padding:18px 20px;background:var(--s2);border:1px solid var(--bd);border-left:3px solid var(--@(risk > 0.7 ? "err" : risk > 0.4 ? "warn" : "ok"));border-radius:var(--r2);display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:200px;">
+                <div style="font-size:10px;letter-spacing:.08em;color:var(--tf);margin-bottom:4px;text-transform:uppercase;">Priority Workspace</div>
+                <div style="font:700 17px/1.2 var(--font);color:var(--t);margin-bottom:6px;">@_priorityWorkspace.Title</div>
+                <div style="font-size:12px;color:var(--tm);line-height:1.5;">@BuildWorkspaceWhyItMatters(_priorityOverview, _priorityWorkspace)</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+                <div style="text-align:center;">
+                    <div class="vi-chip @riskCls" style="font-size:11px;">@riskLbl</div>
+                    @if (_priorityOverview is not null)
+                    {
+                        <div style="font-size:10px;color:var(--tf);margin-top:4px;">@_priorityOverview.EventCount events</div>
+                    }
+                </div>
+                <button class="vi-btn primary sm" @onclick='() => Nav.NavigateTo($"/workspaces/{_priorityWorkspace.Slug}")'>
+                    Open Workspace
+                </button>
+            </div>
+        </div>
+    }
+    else if (_wsLoading)
+    {
+        <div style="margin-bottom:16px;padding:14px 16px;background:var(--s2);border:1px solid var(--bd);border-radius:var(--r2);font-size:12px;color:var(--tf);">
+            LOADING PRIORITY WORKSPACE…
+        </div>
+    }
+
+    <!-- Metrics strip -->
+    <div class="vi-metrics" style="margin-bottom:16px;">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Events</div>
+            <div class="vi-metric-val accent">@Svc.WindowEvents.Count</div>
+            <div class="vi-metric-note">in @Svc.TimeWindow window</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">High Risk</div>
+            <div class="vi-metric-val err">@Svc.WindowEvents.Count(e => (e.RiskScore ?? 0) > 0.7)</div>
+            <div class="vi-metric-note">events ≥ 0.7</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Situations</div>
+            <div class="vi-metric-val warn">@Svc.SituationCases.Count</div>
+            <div class="vi-metric-note">active cases</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Workspaces</div>
+            <div class="vi-metric-val">@(_allWorkspaces?.Count(w => w.Status == "active") ?? 0)</div>
+            <div class="vi-metric-note">active</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Live Feed</div>
+            <div class="vi-metric-val @(Svc.IsConnected ? "ok" : "err")">@(Svc.IsConnected ? "LIVE" : "OFFLINE")</div>
+            <div class="vi-metric-note">SignalR</div>
+        </div>
+    </div>
+
+    <!-- Main content split -->
+    @if (Svc.BriefLoading && !Svc.WindowEvents.Any())
+    {
+        <div class="vi-loading">LOADING BRIEF</div>
+    }
+    else
+    {
+        <div class="vi-split wide">
+
+            <!-- Left: MC-2 Top Developments -->
+            <div class="vi-stack">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Top Developments</span>
+                        <div class="vi-row">
+                            <span class="vi-chip">@Svc.TimeWindow</span>
+                            <button class="vi-btn sm" @onclick='() => Nav.NavigateTo("/workspaces")'>Open Workspaces</button>
+                        </div>
+                    </div>
+                    @if (!Svc.WindowEvents.Any())
+                    {
+                        <div class="vi-empty">
+                            <span class="material-symbols-outlined">feed</span>
+                            No events in @Svc.TimeWindow window
+                        </div>
+                    }
+                    else
+                    {
+                        var topDevs = Svc.WindowEvents.Take(5).ToList();
+                        var wsCtx   = _priorityWorkspace?.Slug;
+                        <div class="vi-panel-body vi-stack">
+                            @foreach (var ev in topDevs)
+                            {
+                                var r    = ev.RiskScore ?? 0;
+                                var rc   = r > 0.7 ? "err" : r > 0.4 ? "warn" : "";
+                                var href = wsCtx is not null
+                                    ? $"/events/{ev.EventId}?from={Uri.EscapeDataString(wsCtx)}"
+                                    : $"/events/{ev.EventId}";
+                                <div style="padding:10px 0;border-bottom:1px solid var(--bd);cursor:pointer;"
+                                     @onclick='() => Nav.NavigateTo(href)'>
+                                    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+                                        <div style="font:600 13px/1.3 var(--font);color:var(--t);flex:1;">@ev.Title</div>
+                                        <span class="vi-chip @rc" style="flex-shrink:0;font-size:10px;">@r.ToString("0.0")</span>
+                                    </div>
+                                    <div style="display:flex;gap:10px;margin-top:4px;font-size:11px;color:var(--tf);">
+                                        <span>@ev.Source</span>
+                                        @if (!string.IsNullOrEmpty(ev.LocationSummary))
+                                        {
+                                            <span>· @ev.LocationSummary</span>
+                                        }
+                                        <span style="margin-left:auto;">@FmtAge(ev.Timestamp)</span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                        @if (Svc.WindowEvents.Count > 5)
+                        {
+                            <div style="padding:8px 16px;border-top:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center;">
+                                <span style="font-size:11px;color:var(--tf);">+@(Svc.WindowEvents.Count - 5) more in workspaces</span>
+                                <button class="vi-btn sm" @onclick='() => Nav.NavigateTo(wsCtx is not null ? $"/workspaces/{wsCtx}" : "/workspaces")'>
+                                    @(wsCtx is not null ? "Open Workspace" : "Go to Workspaces")
+                                </button>
+                            </div>
+                        }
+                    }
+                </div>
+
+                @if (Svc.BriefBullets.Any())
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Intelligence Brief</span>
+                            @if (Svc.BriefTimestamp is not null)
+                            {
+                                <span style="font-size:10px;color:var(--tf);">@Svc.BriefTimestamp.Value.ToString("HH:mm") UTC</span>
+                            }
+                        </div>
+                        <div class="vi-panel-body vi-stack">
+                            @foreach (var b in Svc.BriefBullets)
+                            {
+                                <div style="font-size:13px;color:var(--t2);padding:4px 0;border-bottom:1px solid rgba(255,255,255,.03);line-height:1.5;">
+                                    <span style="color:var(--acc);margin-right:8px;">›</span>@b
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <!-- Right: MC-3 Pending Summary + Actors + Workspaces -->
+            <div class="vi-stack">
+
+                <!-- MC-3: Pending Actions Summary -->
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Pending Attention</span>
+                        <button class="vi-btn sm" @onclick='() => Nav.NavigateTo("/workspaces")'>Workspaces</button>
+                    </div>
+                    <div class="vi-panel-body">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
+                            <div style="padding:10px 12px;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.2);border-radius:var(--r1);text-align:center;">
+                                <div style="font:700 22px/1 var(--font);color:var(--err);">@Svc.WindowEvents.Count(e => (e.RiskScore ?? 0) > 0.7)</div>
+                                <div style="font-size:10px;color:var(--tf);margin-top:4px;text-transform:uppercase;letter-spacing:.06em;">High Risk</div>
+                            </div>
+                            <div style="padding:10px 12px;background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.2);border-radius:var(--r1);text-align:center;">
+                                <div style="font:700 22px/1 var(--font);color:var(--warn);">@Svc.SituationCases.Count</div>
+                                <div style="font-size:10px;color:var(--tf);margin-top:4px;text-transform:uppercase;letter-spacing:.06em;">Situations</div>
+                            </div>
+                            <div style="padding:10px 12px;background:var(--s1);border:1px solid var(--bd);border-radius:var(--r1);text-align:center;">
+                                <div style="font:700 22px/1 var(--font);color:var(--t);">@Svc.WindowEvents.Count(e => (e.RiskScore ?? 0) is >= 0.4 and <= 0.7)</div>
+                                <div style="font-size:10px;color:var(--tf);margin-top:4px;text-transform:uppercase;letter-spacing:.06em;">Elevated</div>
+                            </div>
+                            <div style="padding:10px 12px;background:var(--s1);border:1px solid var(--bd);border-radius:var(--r1);text-align:center;">
+                                <div style="font:700 22px/1 var(--font);color:var(--t);">@Svc.RiskLadder.Count</div>
+                                <div style="font-size:10px;color:var(--tf);margin-top:4px;text-transform:uppercase;letter-spacing:.06em;">Risk Regions</div>
+                            </div>
+                        </div>
+
+                        @if (Svc.SituationCases.Any())
+                        {
+                            <div style="font-size:11px;color:var(--tf);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;">Active Situations</div>
+                            @foreach (var s in Svc.SituationCases.Take(3))
+                            {
+                                <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--bd);font-size:12px;">
+                                    <span style="color:var(--t2);">@(s.Title ?? s.SituationId)</span>
+                                    <span class="vi-chip warn" style="font-size:10px;">@(s.Severity?.ToUpperInvariant() ?? "ACTIVE")</span>
+                                </div>
+                            }
+                            @if (Svc.SituationCases.Count > 3)
+                            {
+                                <div style="font-size:11px;color:var(--tf);padding-top:6px;">+@(Svc.SituationCases.Count - 3) more situations</div>
+                            }
+                        }
+                    </div>
+                </div>
+
+                @if (Svc.TopActors.Any())
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Top Actors</span>
+                            <button class="vi-btn sm" @onclick='() => Nav.NavigateTo("/entities")'>View</button>
+                        </div>
+                        <div class="vi-panel-body vi-stack">
+                            @foreach (var a in Svc.TopActors.Take(5))
+                            {
+                                <div class="vi-kv">
+                                    <span class="vi-kv-key">@a.Name</span>
+                                    <div style="display:flex;gap:6px;align-items:center;">
+                                        <span class="vi-chip" style="font-size:10px;">@a.Type</span>
+                                        @if (a.MentionCount > 0)
+                                        {
+                                            <span style="font-size:10px;color:var(--tf);">@a.MentionCount mentions</span>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                @if (_allWorkspaces is { Count: > 1 })
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">All Workspaces</span>
+                            <button class="vi-btn sm" @onclick='() => Nav.NavigateTo("/workspaces")'>View all</button>
+                        </div>
+                        <div class="vi-panel-body vi-stack">
+                            @foreach (var ws in _allWorkspaces.Where(w => w.Status == "active").Take(5))
+                            {
+                                <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;cursor:pointer;"
+                                     @onclick='() => Nav.NavigateTo($"/workspaces/{ws.Slug}")'>
+                                    <span style="font-size:12px;color:var(--t2);">@ws.Title</span>
+                                    <div style="display:flex;gap:6px;align-items:center;">
+                                        @if (!string.IsNullOrEmpty(ws.Classification))
+                                        {
+                                            <span class="vi-chip info" style="font-size:10px;">@ws.Classification</span>
+                                        }
+                                        <span style="font-size:10px;color:var(--tf);">@ws.UpdatedAt.ToString("dd MMM")</span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    bool _wsLoading = true;
+    WorkspaceListItem? _priorityWorkspace;
+    WorkspaceOverview? _priorityOverview;
+    List<WorkspaceListItem>? _allWorkspaces;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged     += OnSvcChanged;
+        Streams.OnChanged += OnSvcChanged;
+
+        await Task.WhenAll(
+            Svc.EnsureLoadedAsync(),
+            Streams.EnsureLoadedAsync(),
+            LoadWorkspaceContextAsync());
+    }
+
+    async Task LoadWorkspaceContextAsync()
+    {
+        try
+        {
+            var resp = await WorkspaceSvc.GetWorkspacesAsync();
+            _allWorkspaces = resp?.Items ?? [];
+
+            var ws = _allWorkspaces
+                .Where(w => w.Status == "active")
+                .OrderByDescending(w => w.UpdatedAt)
+                .FirstOrDefault();
+
+            _priorityWorkspace = ws;
+
+            if (ws is not null)
+            {
+                try { _priorityOverview = await WorkspaceSvc.GetWorkspaceOverviewAsync(ws.Slug); }
+                catch { }
+            }
+        }
+        catch { }
+        finally
+        {
+            _wsLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    async Task RefreshAsync()
+    {
+        _wsLoading = true;
+        _priorityWorkspace = null;
+        _priorityOverview  = null;
+        _allWorkspaces     = null;
+        await Task.WhenAll(
+            Svc.RefreshWatchAsync(true),
+            LoadWorkspaceContextAsync());
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    static string BuildWorkspaceWhyItMatters(WorkspaceOverview? ov, WorkspaceListItem ws)
+    {
+        if (ov is null)
+            return ws.Description is { Length: > 0 } d
+                ? (d.Length > 100 ? d[..100] + "…" : d)
+                : "Most recently updated active workspace.";
+
+        var parts = new List<string>();
+        if (ov.EventCount > 0)    parts.Add($"{ov.EventCount} event{(ov.EventCount == 1 ? "" : "s")} in window");
+        if (ov.MaxRiskScore > 0.7) parts.Add($"peak risk {ov.MaxRiskScore:0.0}");
+        else if (ov.MaxRiskScore > 0.4) parts.Add($"elevated signals ({ov.MaxRiskScore:0.0})");
+        if (ov.SentimentScore < 0.4 && ov.SentimentScore > 0)
+            parts.Add("negative sentiment");
+        if (ov.NarrativeCount > 0) parts.Add($"{ov.NarrativeCount} narrative{(ov.NarrativeCount == 1 ? "" : "s")}");
+        if (ov.VesselCount + ov.FlightCount > 0)
+            parts.Add($"{ov.VesselCount + ov.FlightCount} asset{(ov.VesselCount + ov.FlightCount == 1 ? "" : "s")} tracked");
+
+        return parts.Count > 0
+            ? string.Join(" · ", parts)
+            : "Active workspace with recent updates.";
+    }
+
+    static string FmtAge(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "--";
+        var s = raw.TrimEnd();
+        if (s.Length > 7 && s[^1] == 'Z' && (s[^7] == '+' || s[^7] == '-')) s = s[..^1];
+        if (!DateTimeOffset.TryParse(s,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal, out var dto)) return "--";
+        var d = DateTimeOffset.UtcNow - dto.ToUniversalTime();
+        return d.TotalMinutes < 60  ? $"{(int)d.TotalMinutes}m ago"
+             : d.TotalHours   < 24  ? $"{(int)d.TotalHours}h ago"
+             : $"{(int)d.TotalDays}d ago";
+    }
+
+    public void Dispose()
+    {
+        Svc.OnChanged     -= OnSvcChanged;
+        Streams.OnChanged -= OnSvcChanged;
+    }
+}

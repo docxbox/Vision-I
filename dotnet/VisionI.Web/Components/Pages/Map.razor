@@ -1,0 +1,509 @@
+@page "/map"
+@inject MapService Svc
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Map | Vision-I</PageTitle>
+
+<div class="vi-page" style="overflow:hidden;height:100%;">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Detect / Map</div>
+            <h1 class="vi-h1">@(HasFocusedAsset ? "Asset Location" : "Intelligence Map")</h1>
+            <div class="vi-sub">GEO-EVENTS · HEAT · REGION RISK</div>
+        </div>
+        <div class="vi-page-actions">
+            <span class="vi-chip info">@Svc.FilteredMarkers.Count events</span>
+            <button class="vi-btn" disabled="@Svc.Loading" @onclick="RefreshAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Events</div>
+            <div class="vi-metric-val accent">@Svc.FilteredMarkers.Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">High Risk</div>
+            <div class="vi-metric-val err">@Svc.HighRiskCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Negative</div>
+            <div class="vi-metric-val warn">@Svc.NegativeCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Regions</div>
+            <div class="vi-metric-val">@Svc.DistinctRegionCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Aircraft</div>
+            <div class="vi-metric-val @(Svc.AircraftCount > 0 ? "ok" : "")">@Svc.AircraftCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Vessels</div>
+            <div class="vi-metric-val @(Svc.VesselCount > 0 ? "ok" : "")">@Svc.VesselCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Geo Assets</div>
+            <div class="vi-metric-val">@Svc.GeoAssets.Count</div>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Region))
+    {
+        <div style="padding:4px 0 0;display:flex;gap:6px;align-items:center;">
+            <span style="font:600 11px/1 var(--mono);color:var(--tm);">FROM EVENT:</span>
+            <span class="vi-chip info">@Region</span>
+        </div>
+    }
+
+    <!-- Layer + filter controls -->
+    <div class="vi-filter-bar">
+        <label class="vi-row" style="gap:5px;font:600 11px/1 var(--mono);color:var(--tm);">
+            <input type="checkbox" @bind="Svc.ShowPositive" /> Positive
+        </label>
+        <label class="vi-row" style="gap:5px;font:600 11px/1 var(--mono);color:var(--tm);">
+            <input type="checkbox" @bind="Svc.ShowNegative" /> Negative
+        </label>
+        <label class="vi-row" style="gap:5px;font:600 11px/1 var(--mono);color:var(--tm);">
+            <input type="checkbox" @bind="Svc.ShowNeutral" /> Neutral
+        </label>
+        <select class="vi-select sm" style="width:100px;" @bind="Svc.TimeFilter" @bind:after="OnFiltersChanged">
+            <option value="24h">24h</option>
+            <option value="7d">7d</option>
+            <option value="30d">30d</option>
+            <option value="all">All</option>
+        </select>
+        <button class="vi-btn sm @(_showHeat ? "active" : "")" @onclick='() => ToggleLayer("heat")'>Heat</button>
+        <button class="vi-btn sm @(_showEvents ? "active" : "")" @onclick='() => ToggleLayer("events")'>Events</button>
+        <button class="vi-btn sm @(_showAssets ? "active" : "")" @onclick="ToggleAssets">Assets</button>
+        <button class="vi-btn sm @(_showAirspace ? "active" : "")" disabled="@Svc.LoadingAirspace" @onclick="ToggleAirspace">
+            @(Svc.LoadingAirspace ? "Loading..." : $"Airspace {(Svc.AirspaceData?.Closures.Count > 0 ? $"({Svc.AirspaceData.Closures.Count})" : "")}")
+        </button>
+        <button class="vi-btn sm @(_showSatellite ? "active" : "")" disabled="@Svc.LoadingAirspace" @onclick="ToggleSatellite">
+            Satellite @(Svc.SatelliteData?.Passes.Count > 0 ? $"({Svc.SatelliteData.Passes.Count})" : "")
+        </button>
+    </div>
+
+    <div class="vi-map-shell" style="flex:1;min-height:0;display:flex;flex-direction:row;gap:0;">
+        <div id="vi-map" style="flex:1;background:var(--bg);"></div>
+
+        <!-- Context sidebar -->
+        <div style="width:240px;border-left:1px solid var(--bd);display:flex;flex-direction:column;overflow-y:auto;">
+            @if (HasFocusedAsset)
+            {
+                <div style="padding:12px;border-bottom:1px solid var(--bd);">
+                    <div class="vi-label" style="margin-bottom:8px;">Focused Asset</div>
+                    <div style="font-size:15px;font-weight:800;color:var(--t);overflow-wrap:anywhere;">@(string.IsNullOrWhiteSpace(FocusAssetLabel) ? FocusAssetId : FocusAssetLabel)</div>
+                    <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+                        <span class="vi-chip @TypeCls(FocusAssetType)">@(string.IsNullOrWhiteSpace(FocusAssetType) ? "asset" : FocusAssetType)</span>
+                        <span class="vi-chip info">@FocusLat?.ToString("0.0000"), @FocusLon?.ToString("0.0000")</span>
+                    </div>
+                    <div style="font-size:11px;color:var(--tf);line-height:1.45;margin-top:10px;">
+                        Opened from an asset detail view. The map is centered on the latest known position while nearby events and assets stay available for context.
+                    </div>
+                    <a class="vi-btn sm" style="margin-top:10px;text-decoration:none;display:inline-flex;"
+                       href="/assets/@Uri.EscapeDataString(FocusAssetId ?? "")">
+                        Back to Asset
+                    </a>
+                </div>
+            }
+
+            @if (!HasFocusedAsset && Svc.HotRegions.Any())
+            {
+                <div style="padding:10px;border-bottom:1px solid var(--bd);">
+                    <div class="vi-label" style="margin-bottom:6px;">Hot Regions</div>
+                    <div class="vi-stack" style="gap:4px;">
+                        @foreach (var r in Svc.HotRegions)
+                        {
+                            <div class="vi-kv" style="cursor:default;">
+                                <span class="vi-kv-key vi-trunc">@r.Region</span>
+                                <span class="vi-chip @RiskCls(r.AvgRisk)">@r.EventCount</span>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (!HasFocusedAsset && !string.IsNullOrWhiteSpace(Svc.WhatChangedSummary))
+            {
+                <div style="padding:10px;border-bottom:1px solid var(--bd);">
+                    <div class="vi-label" style="margin-bottom:4px;">What Changed</div>
+                    <div style="font-size:12px;color:var(--t2);line-height:1.5;">@Svc.WhatChangedSummary</div>
+                </div>
+            }
+
+            @if (!HasFocusedAsset && !string.IsNullOrWhiteSpace(Svc.WhyItMattersSummary))
+            {
+                <div style="padding:10px;border-bottom:1px solid var(--bd);">
+                    <div class="vi-label" style="margin-bottom:4px;">Why It Matters</div>
+                    <div style="font-size:12px;color:var(--t2);line-height:1.5;">@Svc.WhyItMattersSummary</div>
+                </div>
+            }
+
+            @if (!HasFocusedAsset && !string.IsNullOrWhiteSpace(Svc.RecommendedActionSummary))
+            {
+                <div style="padding:10px;border-bottom:1px solid var(--bd);">
+                    <div class="vi-label" style="margin-bottom:4px;">Recommended Action</div>
+                    <div style="font-size:12px;color:var(--p2);line-height:1.5;">@Svc.RecommendedActionSummary</div>
+                </div>
+            }
+
+            @if (_showAssets && Svc.GeoAssets.Any())
+            {
+                <div style="padding:10px;">
+                    <div class="vi-label" style="margin-bottom:6px;">Assets (@Svc.GeoAssets.Count geo-located)</div>
+                    <div class="vi-stack" style="gap:4px;">
+                        @foreach (var a in Svc.GeoAssets.Take(20))
+                        {
+                            <div style="background:var(--s2);border-radius:var(--r2);padding:6px 8px;">
+                                <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
+                                    <span style="font-size:12px;color:var(--t);font-weight:500;">@(a.Name ?? a.Callsign ?? a.Identifier ?? "Asset")</span>
+                                    <span class="vi-chip" style="font-size:10px;">@(a.AssetType ?? "unknown")</span>
+                                </div>
+                                @if (a.LastLat.HasValue && a.LastLon.HasValue)
+                                {
+                                    <div style="font-size:10px;color:var(--tf);font-family:var(--mono);">
+                                        @a.LastLat.Value.ToString("0.0000"), @a.LastLon.Value.ToString("0.0000")
+                                        @if (a.LastAltitude.HasValue) { <span> · @((int)a.LastAltitude.Value)ft</span> }
+                                        @if (a.LastSpeed.HasValue) { <span> · @((int)a.LastSpeed.Value)kt</span> }
+                                    </div>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(a.OriginCountry))
+                                {
+                                    <div style="font-size:10px;color:var(--tm);">@a.OriginCountry · @a.LastSeen</div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+            else if (_showAssets)
+            {
+                <div style="padding:10px;">
+                    <div class="vi-label" style="margin-bottom:4px;">Assets</div>
+                    <div style="font-size:12px;color:var(--tf);">No geo-located assets in state.</div>
+                </div>
+            }
+
+            @if (_showAirspace || _showSatellite)
+            {
+                <div style="padding:10px;border-top:1px solid var(--bd);">
+                    <div class="vi-label" style="margin-bottom:6px;">Domain Intelligence</div>
+                    <div class="vi-stack" style="gap:4px;">
+                        @if (Svc.AirspaceData is not null)
+                        {
+                            var nClose = Svc.AirspaceData.Closures.Count;
+                            <div class="vi-kv">
+                                <span class="vi-kv-key">Closures</span>
+                                <span class="vi-chip @(nClose > 0 ? "err" : "")">@nClose</span>
+                            </div>
+                        }
+                        @if (Svc.JammingData is not null)
+                        {
+                            var nTiles = Svc.JammingData.Tiles.Count;
+                            <div class="vi-kv">
+                                <span class="vi-kv-key">Jamming tiles</span>
+                                <span class="vi-chip @(nTiles > 0 ? "warn" : "")">@nTiles</span>
+                            </div>
+                        }
+                        @if (Svc.RerouteData is not null)
+                        {
+                            var nReroutes = Svc.RerouteData.Events.Count;
+                            <div class="vi-kv">
+                                <span class="vi-kv-key">Reroutes</span>
+                                <span class="vi-chip @(nReroutes > 0 ? "warn" : "")">@nReroutes</span>
+                            </div>
+                            @if (nReroutes > 0)
+                            {
+                                <div style="font-size:10px;color:var(--tf);">Markers show last known position, not full track geometry.</div>
+                            }
+                        }
+                        @if (Svc.SatelliteData is not null)
+                        {
+                            var nPasses = Svc.SatelliteData.Passes.Count;
+                            <div class="vi-kv">
+                                <span class="vi-kv-key">Sat passes</span>
+                                <span class="vi-chip @(nPasses > 0 ? "ok" : "")">@nPasses</span>
+                            </div>
+                        }
+                        @if (Svc.AirspaceData is null && Svc.JammingData is null && !Svc.LoadingAirspace)
+                        {
+                            <div style="font-size:12px;color:var(--tf);">No domain data loaded.</div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter][SupplyParameterFromQuery(Name = "region")] public string? Region { get; set; }
+    [Parameter][SupplyParameterFromQuery(Name = "asset")] public string? FocusAssetId { get; set; }
+    [Parameter][SupplyParameterFromQuery(Name = "lat")] public double? FocusLat { get; set; }
+    [Parameter][SupplyParameterFromQuery(Name = "lon")] public double? FocusLon { get; set; }
+    [Parameter][SupplyParameterFromQuery(Name = "type")] public string? FocusAssetType { get; set; }
+    [Parameter][SupplyParameterFromQuery(Name = "label")] public string? FocusAssetLabel { get; set; }
+
+    private DotNetObjectReference<Map>? _ref;
+    private bool _disposed;
+    private bool _showEvents = true;
+    private bool _showHeat;
+    private bool _showAssets = true;
+    private bool _showAirspace;
+    private bool _showSatellite;
+
+    protected override void OnInitialized()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        Svc.OnMarkersChanged += OnMarkersChanged;
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    // Called from map-interop.js on every (debounced) pan/zoom. Drives viewport-based
+    // asset loading so we never pull the whole global fleet into the browser.
+    [JSInvokable]
+    public Task OnViewportChanged(double south, double west, double north, double east, double zoom)
+        => Svc.LoadAssetsInViewportAsync(south, west, north, east, zoom);
+
+    protected override void OnParametersSet()
+    {
+        // Sync RegionFilter on every navigation, including plain /map (clears stale filter)
+        Svc.RegionFilter = string.IsNullOrWhiteSpace(Region) ? null : Region;
+        if (HasFocusedAsset)
+            _showAssets = true;
+        if (_mapReady)
+            Svc.Materialize();
+    }
+
+    private bool _mapReady;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _ref = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("viMap.initMap", _ref);
+            Svc.RegionFilter = string.IsNullOrWhiteSpace(Region) ? null : Region;
+            await Svc.EnsureLoadedAsync();
+            _mapReady = true;
+            await PushMapStateAsync();
+            if (!string.IsNullOrWhiteSpace(Region))
+            {
+                var match = Svc.FilteredMarkers.FirstOrDefault();
+                if (match is not null)
+                    await JS.InvokeVoidAsync("viMap.flyTo", match.Lat, match.Lng, 6);
+            }
+            if (HasFocusedAsset)
+                await FocusMapAssetAsync();
+        }
+    }
+
+    void OnMarkersChanged()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await PushMapStateAsync();
+            StateHasChanged();
+        });
+    }
+
+    async Task RefreshAsync()
+    {
+        await Svc.LoadAsync();
+    }
+
+    async Task OnFiltersChanged()
+    {
+        Svc.Materialize();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    async Task ToggleLayer(string name)
+    {
+        await JS.InvokeVoidAsync("viMap.toggleLayer", name);
+        if (name == "heat") _showHeat = !_showHeat;
+        if (name == "events") _showEvents = !_showEvents;
+        await PushMapStateAsync();
+        StateHasChanged();
+    }
+
+    async Task ToggleAssets()
+    {
+        _showAssets = !_showAssets;
+        await PushMapStateAsync();
+        StateHasChanged();
+    }
+
+    async Task PushMapStateAsync()
+    {
+        if (_disposed || !_mapReady) return;
+        try
+        {
+            var markers = Svc.FilteredMarkers.Select(m => new
+            {
+                id = m.Id,
+                lat = m.Lat,
+                lon = m.Lng,
+                title = m.Title,
+                source = m.Source,
+                sentiment = m.Sentiment < 0.4 ? "negative" : m.Sentiment > 0.6 ? "positive" : "neutral",
+                risk = m.Weight,
+                color = m.Weight >= 0.7 ? "#f85149" : m.Weight >= 0.4 ? "#e3b341" : "#58a6ff",
+            }).ToArray();
+
+            var heat = Svc.FilteredMarkers
+                .Select(m => new[] { m.Lat, m.Lng, Math.Max(0.15, m.Weight) })
+                .ToArray();
+
+            var assetSource = _showAssets ? Svc.GeoAssets : Enumerable.Empty<VisionI.Web.Models.AssetDto>();
+            var assets = assetSource
+                .Select(a => (object)new
+                {
+                    assetId = a.AssetId,
+                    assetType = a.AssetType,
+                    lat = a.LastLat,
+                    lon = a.LastLon,
+                    heading = a.LastHeading ?? 0,
+                    altitude = a.LastAltitude ?? 0,
+                    speed = a.LastSpeed ?? 0,
+                    label = a.Name ?? a.Callsign ?? a.Identifier ?? a.AssetId,
+                })
+                .Concat(FocusedAssetMarker())
+                .ToArray();
+
+            await JS.InvokeVoidAsync("viMap.renderEvents", markers);
+            await JS.InvokeVoidAsync("viMap.updateHeatmap", heat);
+            await JS.InvokeVoidAsync("viMap.updateAssetsBatch", assets);
+            if (HasFocusedAsset)
+                await FocusMapAssetAsync();
+        }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    bool HasFocusedAsset => !string.IsNullOrWhiteSpace(FocusAssetId) && FocusLat.HasValue && FocusLon.HasValue;
+
+    IEnumerable<object> FocusedAssetMarker()
+    {
+        if (!HasFocusedAsset)
+            yield break;
+
+        yield return new
+        {
+            assetId = FocusAssetId,
+            assetType = string.IsNullOrWhiteSpace(FocusAssetType) ? "asset" : FocusAssetType,
+            lat = FocusLat!.Value,
+            lon = FocusLon!.Value,
+            heading = 0,
+            altitude = 0,
+            speed = 0,
+            label = string.IsNullOrWhiteSpace(FocusAssetLabel) ? FocusAssetId : FocusAssetLabel,
+        };
+    }
+
+    async Task FocusMapAssetAsync()
+    {
+        if (!HasFocusedAsset) return;
+        await JS.InvokeVoidAsync("viMap.focusAsset", new
+        {
+            assetId = FocusAssetId,
+            assetType = string.IsNullOrWhiteSpace(FocusAssetType) ? "asset" : FocusAssetType,
+            lat = FocusLat!.Value,
+            lon = FocusLon!.Value,
+            heading = 0,
+            altitude = 0,
+            speed = 0,
+            zoom = 10,
+            label = string.IsNullOrWhiteSpace(FocusAssetLabel) ? FocusAssetId : FocusAssetLabel,
+        });
+    }
+
+    async Task ToggleAirspace()
+    {
+        _showAirspace = !_showAirspace;
+        if (_showAirspace && Svc.AirspaceData is null)
+            await Svc.LoadAirspaceAsync();
+
+        // Toggle JS layer visibility first so updateAirspace/updateJamming render correctly
+        await JS.InvokeVoidAsync("viMap.toggleLayer", "airspace");
+        await JS.InvokeVoidAsync("viMap.toggleLayer", "jamming");
+        if (Svc.AirspaceData is not null)
+            await JS.InvokeVoidAsync("viMap.updateAirspace", Svc.AirspaceData);
+        if (Svc.JammingData is not null)
+            await JS.InvokeVoidAsync("viMap.updateJamming", Svc.JammingData);
+        if (Svc.RerouteData is not null)
+            await PushReroutesAsync();
+        StateHasChanged();
+    }
+
+    async Task PushReroutesAsync()
+    {
+        if (Svc.RerouteData is null) return;
+        var features = Svc.RerouteData.Events
+            .Where(ev => ev.Lat.HasValue && ev.Lon.HasValue)
+            .Select(ev => (object)new
+            {
+                type = "Feature",
+                geometry = new
+                {
+                    type = "LineString",
+                    coordinates = new[] { new[] { ev.Lon!.Value - 0.4, ev.Lat!.Value }, new[] { ev.Lon.Value + 0.4, ev.Lat.Value } }
+                },
+                properties = new { color = "#d29922" }
+            })
+            .ToArray();
+
+        if (_showAirspace && features.Length > 0)
+            await JS.InvokeVoidAsync("viMap.renderGhostTracks",
+                new { type = "FeatureCollection", features });
+        else
+            await JS.InvokeVoidAsync("viMap.renderGhostTracks",
+                new { type = "FeatureCollection", features = Array.Empty<object>() });
+    }
+
+    async Task ToggleSatellite()
+    {
+        _showSatellite = !_showSatellite;
+        if (_showSatellite)
+        {
+            // Always reload with marker-derived bbox (+/-10 deg), ignoring stale world-bounds cache
+            double latMin = -90, lonMin = -180, latMax = 90, lonMax = 180;
+            var markers = Svc.FilteredMarkers;
+            if (markers.Any())
+            {
+                latMin = Math.Max(-90,  markers.Min(m => m.Lat) - 10);
+                latMax = Math.Min(90,   markers.Max(m => m.Lat) + 10);
+                lonMin = Math.Max(-180, markers.Min(m => m.Lng) - 10);
+                lonMax = Math.Min(180,  markers.Max(m => m.Lng) + 10);
+            }
+            await Svc.LoadSatelliteAsync(latMin, lonMin, latMax, lonMax);
+        }
+
+        await JS.InvokeVoidAsync("viMap.toggleLayer", "satellite");
+        if (Svc.SatelliteData is not null)
+            await JS.InvokeVoidAsync("viMap.updateSatellitePasses", Svc.SatelliteData);
+        StateHasChanged();
+    }
+
+    static string RiskCls(double v) => v switch { > 0.7 => "err", > 0.4 => "warn", _ => "" };
+
+    static string TypeCls(string? t) => t?.ToLowerInvariant() switch
+    {
+        "aircraft" => "info",
+        "vessel" => "ok",
+        "facility" => "warn",
+        _ => ""
+    };
+
+    public ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        Svc.OnChanged -= OnSvcChanged;
+        Svc.OnMarkersChanged -= OnMarkersChanged;
+        _ref?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

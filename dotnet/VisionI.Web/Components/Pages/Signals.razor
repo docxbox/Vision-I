@@ -1,0 +1,167 @@
+@page "/signals"
+@inject SignalsService Svc
+@inject ViLiveSession SignalR
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>Signals | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Explain / Signals</div>
+            <h1 class="vi-h1">Signal Intelligence</h1>
+            <div class="vi-sub">SEMANTIC EMBEDDINGS · VECTOR SEARCH · CORRELATION</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" disabled="@Svc.Loading" @onclick="Svc.LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Signals</div>
+            <div class="vi-metric-val accent">@Svc.CurrentCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Clustered</div>
+            <div class="vi-metric-val">@Svc.ClusteredCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Active Tab</div>
+            <div class="vi-metric-val" style="font-size:14px;">@Svc.Tab.ToUpperInvariant()</div>
+        </div>
+    </div>
+
+    <!-- Tabs + search -->
+    <div class="vi-filter-bar">
+        <div class="vi-tab-grp">
+            <button class="vi-tab-btn @(Svc.Tab == "list" ? "active" : "")" @onclick='() => Svc.SwitchTabAsync("list")'>List</button>
+            <button class="vi-tab-btn @(Svc.Tab == "clusters" ? "active" : "")" @onclick='() => Svc.SwitchTabAsync("clusters")'>Clusters</button>
+            <button class="vi-tab-btn @(Svc.Tab == "stats" ? "active" : "")" @onclick='() => Svc.SwitchTabAsync("stats")'>Stats</button>
+        </div>
+        <input class="vi-input sm" placeholder="Semantic search…" style="width:220px;" @bind="Svc.Query" @bind:event="oninput"
+               @onkeyup="OnSearchKey" />
+        <select class="vi-select sm" style="width:90px;" @bind="Svc.LimitStr">
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+        </select>
+        <button class="vi-btn sm primary" @onclick="Svc.SearchAsync">Search</button>
+    </div>
+
+    @if (Svc.Loading)
+    {
+        <div class="vi-loading">LOADING SIGNALS</div>
+    }
+    else if (Svc.Tab == "stats" && Svc.Stats is { } stats)
+    {
+        <div class="vi-split equal">
+            <div class="vi-panel">
+                <div class="vi-panel-hdr"><span class="vi-panel-title">Signal Statistics</span></div>
+                <div class="vi-panel-body vi-stack">
+                    <div class="vi-kv"><span class="vi-kv-key">Total signals</span><span class="vi-kv-val">@stats.Total</span></div>
+                    <div class="vi-kv"><span class="vi-kv-key">Sources</span><span class="vi-kv-val">@stats.SourceCount</span></div>
+                    <div class="vi-kv"><span class="vi-kv-key">Clusters</span><span class="vi-kv-val">@stats.ClusterCount</span></div>
+                    <div class="vi-kv"><span class="vi-kv-key">Clustered</span><span class="vi-kv-val">@stats.Clustered</span></div>
+                </div>
+            </div>
+            @if (Svc.Correlation is { } corr)
+            {
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Correlation</span></div>
+                    <div class="vi-panel-body vi-stack">
+                        <div class="vi-kv"><span class="vi-kv-key">Clusters</span><span class="vi-kv-val">@corr.ClusterCount</span></div>
+                        <div class="vi-kv"><span class="vi-kv-key">Avg cluster size</span><span class="vi-kv-val">@(corr.AvgClusterSize.ToString("0.0"))</span></div>
+                        <div class="vi-kv"><span class="vi-kv-key">Clustered signals</span><span class="vi-kv-val">@corr.ClusteredSignals</span></div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+    else if (Svc.Tab == "clusters" && Svc.Clusters is null)
+    {
+        <div class="vi-empty">
+            <span class="material-symbols-outlined">hub</span>
+            Cluster data unavailable — correlation engine may still be warming up.
+            <div style="margin-top:8px;"><button class="vi-btn sm" @onclick="Svc.LoadClustersAsync">Retry</button></div>
+        </div>
+    }
+    else if (Svc.Tab == "search" && Svc.SearchResult is null && !string.IsNullOrWhiteSpace(Svc.Query))
+    {
+        <div class="vi-empty"><span class="material-symbols-outlined">search_off</span>Search returned no results or failed.</div>
+    }
+    else
+    {
+        <div class="vi-panel" style="flex:1;min-height:0;">
+            <div class="vi-tbl-wrap">
+                <table class="vi-table">
+                    <thead>
+                        <tr>
+                            <th>Title</th>
+                            <th>Type</th>
+                            <th>Source</th>
+                            <th>Cluster</th>
+                            <th>Confidence</th>
+                            <th>Driver</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (!Svc.CurrentRows.Any())
+                        {
+                            <tr><td colspan="6" class="vi-empty" style="text-align:center;padding:24px;">
+                                @(Svc.Tab == "list" ? "No signals — data ingestion may still be in progress." :
+                                  Svc.Tab == "clusters" ? "No clusters — signals may not have been processed yet." :
+                                  "No results.")
+                            </td></tr>
+                        }
+                        @foreach (var s in Svc.CurrentRows)
+                        {
+                            <tr style="cursor:pointer;"
+                                @onclick='() => Nav.NavigateTo($"/signals/{Uri.EscapeDataString(s.Id)}")'>
+                                <td>
+                                    <div class="vi-td-title vi-trunc" style="max-width:280px;">@s.Title</div>
+                                    @if (!string.IsNullOrWhiteSpace(s.Location))
+                                    {
+                                        <div class="vi-td-note">@s.Location</div>
+                                    }
+                                </td>
+                                <td class="vi-td-mono">@s.Type</td>
+                                <td class="vi-td-mono">@s.Source</td>
+                                <td class="vi-td-mono vi-faint">@(string.IsNullOrWhiteSpace(s.ClusterId) ? "—" : s.ClusterId[..Math.Min(8, s.ClusterId.Length)])</td>
+                                <td><span class="vi-chip @ConfCls(s.Confidence)">@(s.Confidence.ToString("0.00"))</span></td>
+                                <td class="vi-td-mono vi-faint vi-trunc" style="max-width:160px;">@s.Driver</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged                += OnSvcChanged;
+        SignalR.OnIntelligenceUpdate += OnIntelligenceUpdate;
+        SignalR.OnCorrelationUpdate  += OnCorrelationUpdate;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    async Task OnIntelligenceUpdate() => await InvokeAsync(Svc.LoadAsync);
+    async Task OnCorrelationUpdate()  => await InvokeAsync(Svc.LoadAsync);
+
+    static string ConfCls(double v) => v switch { > 0.8 => "ok", > 0.5 => "info", _ => "" };
+
+    async Task OnSearchKey(KeyboardEventArgs e) { if (e.Key == "Enter") await Svc.SearchAsync(); }
+
+    public void Dispose()
+    {
+        Svc.OnChanged                -= OnSvcChanged;
+        SignalR.OnIntelligenceUpdate -= OnIntelligenceUpdate;
+        SignalR.OnCorrelationUpdate  -= OnCorrelationUpdate;
+    }
+}

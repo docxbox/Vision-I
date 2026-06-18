@@ -1,0 +1,296 @@
+@page "/operations"
+@layout AnalystLayout
+@inject OperationsService Svc
+@implements IDisposable
+
+<PageTitle>Operations | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Command / Operations</div>
+            <h1 class="vi-h1">Operations Centre</h1>
+            <div class="vi-sub">DECISION SUPPORT · COURSE OF ACTION · TRIAGE</div>
+        </div>
+        <div class="vi-page-actions">
+            <span class="vi-chip @OperationsService.ThreatPostureClass(Svc.ThreatPosture)">@Svc.ThreatPosture</span>
+            <button class="vi-btn" disabled="@Svc.Refreshing" @onclick="Svc.RefreshAllAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Queue</div>
+            <div class="vi-metric-val accent">@Svc.Queue.Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Linked Alerts</div>
+            <div class="vi-metric-val warn">@Svc.LinkedAlertCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Related Events</div>
+            <div class="vi-metric-val">@Svc.RelatedEventCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Signals</div>
+            <div class="vi-metric-val">@Svc.SupportingSignalCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Similar Decisions</div>
+            <div class="vi-metric-val">@Svc.SimilarDecisionCount</div>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Svc.Msg))
+    {
+        var isOk = Svc.Msg.Contains("RECORDED") || Svc.Msg.Contains("SAVED") || Svc.Msg.Contains("COMPLETE");
+        <div class="vi-panel" style="border-left:3px solid @(isOk ? "var(--ok)" : "var(--err)");padding:6px 10px;margin-bottom:8px;">
+            <span class="vi-td-mono" style="font-size:12px;color:@(isOk ? "var(--ok)" : "var(--err)");">@Svc.Msg</span>
+        </div>
+    }
+
+    <div class="vi-split wide" style="flex:1;min-height:0;">
+        <!-- Queue -->
+        <div class="vi-panel">
+            <div class="vi-panel-hdr">
+                <span class="vi-panel-title">Operations Queue</span>
+                <span class="vi-chip warn">@Svc.Queue.Count</span>
+            </div>
+            @if (!Svc.Queue.Any())
+            {
+                <div class="vi-empty">
+                    <span class="material-symbols-outlined">task_alt</span>
+                    Queue is clear
+                </div>
+            }
+            else
+            {
+                <div class="vi-tbl-wrap">
+                    <table class="vi-table">
+                        <thead>
+                            <tr>
+                                <th>Event</th>
+                                <th>Risk</th>
+                                <th>Alerts</th>
+                                <th>Signals</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in Svc.Queue)
+                            {
+                                <tr class="@(Svc.SelectedItem?.Id == item.Id ? "sel" : "")"
+                                    style="cursor:pointer;"
+                                    @onclick="() => Svc.SelectItemAsync(item)">
+                                    <td>
+                                        <div class="vi-td-title vi-trunc" style="max-width:220px;">@item.Title</div>
+                                        <div class="vi-td-note">@OperationsService.FmtTime(item.Timestamp)</div>
+                                    </td>
+                                    <td><span class="vi-chip @OperationsService.SevClass(item.RiskScore)">@(item.RiskScore.ToString("0.0"))</span></td>
+                                    <td class="vi-td-mono">@(item.Alerts?.Count ?? 0)</td>
+                                    <td class="vi-td-mono">@item.SignalCount</td>
+                                    <td class="vi-td-mono vi-trunc" style="max-width:120px;">@item.RecommendedNextAction</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <!-- Detail + decision -->
+        <div class="vi-stack" style="min-height:0;overflow-y:auto;">
+            @if (Svc.SelectedItem is { } sel)
+            {
+                <!-- Selected event detail -->
+                <div class="vi-panel soft">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title vi-trunc">@sel.Title</span>
+                        <span class="vi-chip @OperationsService.SevClass(sel.RiskScore)">@OperationsService.SevLbl(sel.RiskScore)</span>
+                    </div>
+                    <div class="vi-panel-body vi-stack">
+                        @if (!string.IsNullOrWhiteSpace(Svc.SituationCaseTitle))
+                        {
+                            <div class="vi-kv">
+                                <span class="vi-kv-key">Situation</span>
+                                <span class="vi-kv-val">@Svc.SituationCaseTitle</span>
+                            </div>
+                        }
+
+                        <div class="vi-kv">
+                            <span class="vi-kv-key">Driver</span>
+                            <span class="vi-kv-val vi-td-mono">@Svc.Driver</span>
+                        </div>
+
+                        <div class="vi-kv">
+                            <span class="vi-kv-key">Next step</span>
+                            <span class="vi-kv-val @(Svc.Next == "decide now" ? "warn" : "")">@Svc.Next</span>
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(Svc.WhyItMatters) && Svc.WhyItMatters.Length > 20)
+                        {
+                            <div class="vi-panel" style="background:rgba(96,165,250,.06);border-left:2px solid var(--accent);padding:8px;">
+                                <div class="vi-label" style="margin-bottom:3px;">Assessment</div>
+                                <div style="font-size:12px;color:var(--t2);line-height:1.5;">@Svc.WhyItMatters</div>
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrWhiteSpace(Svc.RecommendedAction))
+                        {
+                            <div>
+                                <div class="vi-label">Recommended Action</div>
+                                <div style="font-size:13px;color:var(--p2);line-height:1.5;font-weight:500;">@Svc.RecommendedAction</div>
+                            </div>
+                        }
+
+                        @if (Svc.CoursesOfAction.Any())
+                        {
+                            <div>
+                                <div class="vi-label">Courses of Action</div>
+                                <div class="vi-stack" style="gap:4px;">
+                                    @foreach (var coa in Svc.CoursesOfAction)
+                                    {
+                                        <div class="vi-item" style="padding:6px 8px;cursor:default;">
+                                            <div class="vi-item-main">
+                                                <div class="vi-item-title">@coa.Title</div>
+                                                @if (!string.IsNullOrWhiteSpace(coa.ExpectedImpact))
+                                                {
+                                                    <div class="vi-item-meta">@coa.ExpectedImpact</div>
+                                                }
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        }
+
+                        @if (Svc.ContextPlaybooks.Any())
+                        {
+                            <div>
+                                <div class="vi-label">Recommended Playbooks</div>
+                                <div class="vi-tags">
+                                    @foreach (var p in Svc.ContextPlaybooks)
+                                    {
+                                        <span class="vi-chip info">@p.Name</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+
+                        <!-- Nav links -->
+                        <div class="vi-row" style="gap:6px;margin-top:4px;">
+                            @if (!string.IsNullOrWhiteSpace(sel.Id))
+                            {
+                                <a class="vi-btn sm" href="/events/@Uri.EscapeDataString(sel.Id)">Event Detail →</a>
+                            }
+                            <a class="vi-btn sm" href="/triage">Triage →</a>
+                            @if (!string.IsNullOrWhiteSpace(Svc.SituationCaseId))
+                            {
+                                <a class="vi-btn sm" href="/missions">Situation →</a>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Submit decision -->
+                <div class="vi-panel soft">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Log Decision</span></div>
+                    <div class="vi-panel-body vi-stack">
+                        <div class="vi-form-row">
+                            <div class="vi-field" style="flex:1;">
+                                <label class="vi-label">Triage Status</label>
+                                <select class="vi-select sm" @bind="Svc.TriageStatus">
+                                    <option value="reviewing">Reviewing</option>
+                                    <option value="escalated">Escalated</option>
+                                    <option value="dismissed">Dismissed</option>
+                                    <option value="actioned">Actioned</option>
+                                </select>
+                            </div>
+                            <div class="vi-field" style="flex:1;">
+                                <label class="vi-label">Priority</label>
+                                <select class="vi-select sm" @bind="Svc.TriagePriority">
+                                    <option value="low">Low</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="high">High</option>
+                                    <option value="critical">Critical</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="vi-field">
+                            <label class="vi-label">Course of Action</label>
+                            <input class="vi-input" placeholder="Describe the action taken…" @bind="Svc.CoaText" />
+                        </div>
+                        <div class="vi-field">
+                            <label class="vi-label">Rationale</label>
+                            <textarea class="vi-textarea" placeholder="Why this action?" @bind="Svc.Rationale"></textarea>
+                        </div>
+                        <div class="vi-row" style="gap:8px;">
+                            <button class="vi-btn primary" disabled="@Svc.Submitting" @onclick="Svc.SubmitDecisionAsync">
+                                @(Svc.Submitting ? "Submitting…" : "Submit Decision")
+                            </button>
+                            <button class="vi-btn" disabled="@Svc.SavingTriage" @onclick="Svc.SaveTriageAsync">
+                                @(Svc.SavingTriage ? "Saving…" : "Save Triage")
+                            </button>
+                            <button class="vi-btn warn" disabled="@(!Svc.CanSimulate || Svc.Simulating)" @onclick="Svc.SimulateAsync">
+                                @(Svc.Simulating ? "Simulating…" : "Simulate COA")
+                            </button>
+                        </div>
+
+                        @if (Svc.SimulateResult.HasValue)
+                        {
+                            var sim = Svc.SimulateResult.Value;
+                            var simStatus  = SimStr(sim, "status", "result", "outcome");
+                            var simMsg     = SimStr(sim, "message", "summary", "detail");
+                            var simImpact  = SimStr(sim, "impact", "expected_impact");
+                            var simRisk    = SimStr(sim, "risk", "risk_delta", "risk_change");
+                            var simOk      = simStatus is "ok" or "success" or "accepted" or "approved";
+                            <div class="vi-panel" style="background:rgba(96,165,250,.05);border-left:2px solid var(--accent);padding:8px;">
+                                <div class="vi-row" style="gap:8px;align-items:center;margin-bottom:6px;">
+                                    <div class="vi-label">Simulation Result</div>
+                                    @if (simStatus != "--")
+                                    {
+                                        <span class="vi-chip @(simOk ? "ok" : "warn")">@simStatus.ToUpperInvariant()</span>
+                                    }
+                                </div>
+                                <div class="vi-stack" style="gap:4px;">
+                                    @if (simMsg != "--") { <div style="font-size:12px;color:var(--t2);">@simMsg</div> }
+                                    @if (simImpact != "--") { <div class="vi-faint" style="font-size:11px;">Impact: @simImpact</div> }
+                                    @if (simRisk != "--")   { <div class="vi-faint" style="font-size:11px;">Risk delta: @simRisk</div> }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="vi-panel soft">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Decision Panel</span></div>
+                    <div class="vi-empty">Select an event from the queue to begin.</div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+
+    static string SimStr(System.Text.Json.JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+        {
+            if (!el.TryGetProperty(k, out var v)) continue;
+            if (v.ValueKind == System.Text.Json.JsonValueKind.String) return v.GetString() ?? "--";
+            return v.ToString();
+        }
+        return "--";
+    }
+}

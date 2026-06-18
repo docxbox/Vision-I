@@ -1,0 +1,146 @@
+@page "/admin/dlq"
+@layout AdminLayout
+@inject AdminDlqService Svc
+@implements IDisposable
+
+<PageTitle>DLQ | Vision-I Admin</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Admin / DLQ</div>
+            <h1 class="vi-h1">Dead Letter Queue</h1>
+            <div class="vi-sub">FAILED JOBS · RETRY · INSPECTION</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" @onclick="Svc.LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-split" style="flex:1;min-height:0;">
+        <div class="vi-panel">
+            <div class="vi-panel-hdr"><span class="vi-panel-title">DLQ Items</span></div>
+            @if (!Svc.Items.HasValue)
+            {
+                <div class="vi-empty">
+                    <span class="material-symbols-outlined">inbox</span>
+                    DLQ is empty
+                </div>
+            }
+            else
+            {
+                var items = GetItems();
+                @if (!items.Any())
+                {
+                    <div class="vi-empty">No items in DLQ</div>
+                }
+                else
+                {
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead><tr><th>#</th><th>Type</th><th>Source</th><th>Error</th><th>Remediation</th><th></th></tr></thead>
+                            <tbody>
+                                @for (int i = 0; i < items.Count; i++)
+                                {
+                                    var idx   = i;
+                                    var item  = items[i];
+                                    var itype = DlqStr(item, "type", "event_type", "kind");
+                                    var isrc  = DlqStr(item, "source", "origin");
+                                    var ierr  = DlqStr(item, "error", "reason", "detail", "message");
+                                    var remedy = ClassifyRemediation(ierr, itype);
+                                    <tr>
+                                        <td class="vi-td-mono vi-faint">@i</td>
+                                        <td class="vi-td-mono">@(itype != "--" ? itype : "event")</td>
+                                        <td class="vi-td-mono vi-faint">@(isrc != "--" ? isrc : "—")</td>
+                                        <td class="vi-td-note vi-trunc vi-faint err" style="max-width:200px;">
+                                            @(ierr != "--" ? ierr : "—")
+                                        </td>
+                                        <td class="vi-td-note vi-faint" style="max-width:160px;font-size:11px;">@remedy</td>
+                                        <td>
+                                            <button class="vi-btn sm primary" @onclick="() => Svc.RetryAsync(idx)">Retry</button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+        </div>
+
+        <div class="vi-panel soft">
+            <div class="vi-panel-hdr"><span class="vi-panel-title">Last Retry Result</span></div>
+            @if (Svc.Last.HasValue)
+            {
+                var lr     = Svc.Last.Value;
+                var status = DlqStr(lr, "status", "result");
+                var msg    = DlqStr(lr, "message", "detail", "error");
+                var ok     = status is "ok" or "success" or "accepted" or "requeued";
+                <div class="vi-panel-body vi-stack">
+                    <div class="vi-row" style="gap:8px;align-items:center;">
+                        <span class="vi-chip @(ok ? "ok" : "err")">@status.ToUpperInvariant()</span>
+                        @if (msg != "--") { <span class="vi-faint" style="font-size:12px;">@msg</span> }
+                    </div>
+                    @if (!ok && msg != "--")
+                    {
+                        <div class="vi-faint" style="font-size:11px;">@ClassifyRemediation(msg, "")</div>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="vi-empty">No retry result yet</div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    List<System.Text.Json.JsonElement> GetItems()
+    {
+        if (!Svc.Items.HasValue) return new();
+        var v = Svc.Items.Value;
+        if (v.ValueKind == System.Text.Json.JsonValueKind.Array)
+            return v.EnumerateArray().ToList();
+        return new();
+    }
+
+    static string DlqStr(System.Text.Json.JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+        {
+            if (!el.TryGetProperty(k, out var v)) continue;
+            if (v.ValueKind == System.Text.Json.JsonValueKind.String) return v.GetString() ?? "--";
+            return v.ToString();
+        }
+        return "--";
+    }
+
+    static string ClassifyRemediation(string error, string type)
+    {
+        var e = error.ToLowerInvariant();
+        if (e.Contains("connection") || e.Contains("timeout") || e.Contains("refused"))
+            return "Check DB/Redis connectivity. Retry when services healthy.";
+        if (e.Contains("duplicate") || e.Contains("unique"))
+            return "Duplicate event. Safe to discard.";
+        if (e.Contains("validation") || e.Contains("schema") || e.Contains("missing"))
+            return "Malformed payload. Check extractor contract.";
+        if (e.Contains("rate limit") || e.Contains("429"))
+            return "API rate limit. Wait and retry.";
+        if (e.Contains("permission") || e.Contains("403") || e.Contains("auth"))
+            return "Auth failure. Check credentials or API key.";
+        if (e == "--" || string.IsNullOrEmpty(e))
+            return "Retry or inspect raw payload below.";
+        return "Transient error. Retry.";
+    }
+
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+}

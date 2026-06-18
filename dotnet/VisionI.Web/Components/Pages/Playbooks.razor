@@ -1,0 +1,175 @@
+@page "/playbooks"
+@layout AnalystLayout
+@inject PlaybooksService Svc
+@inject CopilotService Copilot
+@implements IDisposable
+
+<PageTitle>Playbooks | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Act / Playbooks</div>
+            <h1 class="vi-h1">Response Playbooks</h1>
+            <div class="vi-sub">TRIGGER LOGIC · EXECUTION · AFTER-ACTION REVIEW</div>
+        </div>
+        <div class="vi-page-actions">
+            <span class="vi-chip info">@Svc.PlaybookCount playbooks</span>
+            <a class="vi-btn sm" href="/operations">Operations →</a>
+            <a class="vi-btn sm" href="/triage">Triage →</a>
+            <button class="vi-btn" disabled="@Svc.Loading" @onclick="Svc.LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Total</div>
+            <div class="vi-metric-val accent">@Svc.PlaybookCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Require Approval</div>
+            <div class="vi-metric-val warn">@Svc.PlaybookRows.Count(p => p.RequiresApproval)</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Detail Open</div>
+            <div class="vi-metric-val @(Svc.Detail.HasValue ? "ok" : "")">@(Svc.Detail.HasValue ? "YES" : "—")</div>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Svc.Error))
+    {
+        <div class="vi-err">@Svc.Error</div>
+    }
+
+    @if (Svc.Loading)
+    {
+        <div class="vi-loading">LOADING PLAYBOOKS</div>
+    }
+    else if (!Svc.PlaybookRows.Any())
+    {
+        <div class="vi-empty">
+            <span class="material-symbols-outlined">rocket_launch</span>
+            No playbooks available
+        </div>
+    }
+    else
+    {
+        <div class="vi-split wide" style="flex:1;min-height:0;">
+            <!-- Playbook list -->
+            <div class="vi-panel">
+                <div class="vi-panel-hdr">
+                    <span class="vi-panel-title">Playbook Library</span>
+                    <span class="vi-chip">@Svc.PlaybookRows.Count</span>
+                </div>
+                <div class="vi-tbl-wrap">
+                    <table class="vi-table">
+                        <thead>
+                            <tr>
+                                <th>Playbook</th>
+                                <th>Steps</th>
+                                <th>Driver</th>
+                                <th>Approval</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var p in Svc.PlaybookRows)
+                            {
+                                <tr>
+                                    <td>
+                                        <div class="vi-td-title">@p.Name</div>
+                                        @if (!string.IsNullOrWhiteSpace(p.Objective))
+                                        {
+                                            <div class="vi-td-note vi-trunc" style="max-width:240px;">@p.Objective</div>
+                                        }
+                                    </td>
+                                    <td class="vi-td-mono">@p.StepCount</td>
+                                    <td class="vi-td-mono">@p.Driver</td>
+                                    <td>
+                                        <span class="vi-chip @(p.RequiresApproval ? "warn" : "ok")">
+                                            @(p.RequiresApproval ? "Required" : "Ready")
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <div class="vi-row">
+                                            <button class="vi-btn sm" @onclick="() => Svc.ViewAsync(p.Id)">View</button>
+                                            <button class="vi-btn sm primary" @onclick="() => ExecuteAsync(p.Id, p.Name)">Execute</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Detail + JARVIS assessment -->
+            <div class="vi-stack">
+                @if (Svc.Detail.HasValue)
+                {
+                    <div class="vi-panel soft">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Execution Trace</span></div>
+                        <div class="vi-panel-body">
+                            <pre style="font:400 11px/1.6 var(--mono);color:var(--t2);white-space:pre-wrap;word-break:break-all;overflow:auto;max-height:300px;">@Svc.Detail.Value.ToString()</pre>
+                        </div>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(_assessment))
+                    {
+                        <div class="vi-panel soft">
+                            <div class="vi-panel-hdr"><span class="vi-panel-title">JARVIS Assessment</span></div>
+                            <div class="vi-panel-body">
+                                <div style="font-size:13px;color:var(--t2);line-height:1.6;">@_assessment</div>
+                            </div>
+                        </div>
+                    }
+                    else if (_assessing)
+                    {
+                        <div class="vi-loading">JARVIS ANALYSING</div>
+                    }
+                }
+                else
+                {
+                    <div class="vi-panel soft">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Execution Result</span></div>
+                        <div class="vi-empty">Select a playbook or execute one to inspect the trace.</div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    string _assessment = "";
+    bool _assessing;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.EnsureLoadedAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    async Task ExecuteAsync(string id, string name)
+    {
+        _assessment = "";
+        await Svc.ExecuteAsync(id);
+        if (Svc.Detail.HasValue)
+        {
+            _assessing = true;
+            await InvokeAsync(StateHasChanged);
+            try
+            {
+                var resp = await Copilot.AskRawAsync(
+                    $"Playbook '{name}' executed. Result:\n{Svc.Detail.Value}\n\nBrief 2-sentence tactical assessment: what happened and recommended next action.");
+                _assessment = resp ?? "";
+            }
+            catch { _assessment = "Assessment unavailable."; }
+            finally { _assessing = false; await InvokeAsync(StateHasChanged); }
+        }
+    }
+
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+}

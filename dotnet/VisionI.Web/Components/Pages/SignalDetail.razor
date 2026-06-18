@@ -1,0 +1,246 @@
+@page "/signals/{SignalId}"
+@inject ApiService Api
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>@(_signal?.Title ?? "Signal") | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">
+                <a href="/signals" style="color:var(--tf);text-decoration:none;">Analyse / Signals</a>
+                @if (!string.IsNullOrWhiteSpace(_signal?.Source)) { <span> / @_signal!.Source</span> }
+            </div>
+            <h1 class="vi-h1" style="max-width:820px;">
+                @if (_loading) { <span>Loading…</span> }
+                else if (!string.IsNullOrWhiteSpace(_error)) { <span style="color:var(--err);">@_error</span> }
+                else { <span>@(_signal?.Title ?? "Signal")</span> }
+            </h1>
+            @if (_signal is { } s)
+            {
+                <div class="vi-sub" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px;">
+                    @if (!string.IsNullOrWhiteSpace(s.SignalType)) { <span class="vi-chip">@s.SignalType</span> }
+                    <span class="vi-chip @ConfCls(s.Confidence)">CONF @s.Confidence.ToString("0.00")</span>
+                    @if (!string.IsNullOrWhiteSpace(s.ClusterId)) { <span class="vi-chip info">CLUSTERED</span> }
+                    @if (s.SentimentScore is { } sent) { <span class="vi-chip @SentCls(sent)">SENT @sent.ToString("0.00")</span> }
+                    <span style="color:var(--tm);font-size:11px;">@s.Timestamp</span>
+                </div>
+            }
+        </div>
+        <div class="vi-page-actions">
+            @if (_signal?.SourceEventId is { } evId)
+            {
+                <a class="vi-btn sm" href="/events/@Uri.EscapeDataString(evId)">Source Event</a>
+            }
+            <a class="vi-btn sm" href="/correlation">Correlation</a>
+            <button class="vi-btn sm" @onclick='() => Nav.NavigateTo("/signals")'>← Signals</button>
+        </div>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="vi-loading">LOADING SIGNAL</div>
+    }
+    else if (!string.IsNullOrWhiteSpace(_error) && _signal is null)
+    {
+        <div class="vi-empty">
+            <span class="material-symbols-outlined">error_outline</span>
+            @_error
+        </div>
+    }
+    else if (_signal is { } sig)
+    {
+        <div class="vi-metrics">
+            <div class="vi-metric">
+                <div class="vi-metric-label">Confidence</div>
+                <div class="vi-metric-val @ConfCls(sig.Confidence)">@sig.Confidence.ToString("0.00")</div>
+            </div>
+            @if (sig.SentimentScore.HasValue)
+            {
+                <div class="vi-metric">
+                    <div class="vi-metric-label">Sentiment</div>
+                    <div class="vi-metric-val @SentCls(sig.SentimentScore.Value)">@sig.SentimentScore.Value.ToString("0.00")</div>
+                </div>
+            }
+            <div class="vi-metric">
+                <div class="vi-metric-label">Actors</div>
+                <div class="vi-metric-val accent">@sig.Actors.Count</div>
+            </div>
+            <div class="vi-metric">
+                <div class="vi-metric-label">Clustered</div>
+                <div class="vi-metric-val @(string.IsNullOrWhiteSpace(sig.ClusterId) ? "" : "ok")">
+                    @(string.IsNullOrWhiteSpace(sig.ClusterId) ? "NO" : "YES")
+                </div>
+            </div>
+        </div>
+
+        <div class="vi-split wide" style="flex:1;min-height:0;align-items:flex-start;">
+            <!-- LEFT -->
+            <div class="vi-stack" style="flex:2;min-width:0;">
+
+                @if (!string.IsNullOrWhiteSpace(sig.Body))
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Content</span></div>
+                        <div class="vi-panel-body">
+                            <div style="font-size:13px;color:var(--t2);line-height:1.65;white-space:pre-wrap;">@sig.Body</div>
+                        </div>
+                    </div>
+                }
+                else if (!string.IsNullOrWhiteSpace(sig.Title))
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Title</span></div>
+                        <div class="vi-panel-body">
+                            <div style="font-size:13px;color:var(--t2);line-height:1.65;">@sig.Title</div>
+                        </div>
+                    </div>
+                }
+
+                @if (sig.Actors.Any())
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">Actors</span>
+                            <span class="vi-chip">@sig.Actors.Count</span>
+                        </div>
+                        <div class="vi-panel-body">
+                            <div class="vi-tags">
+                                @foreach (var a in sig.Actors) { <a class="vi-chip info" href="/entities">@a</a> }
+                            </div>
+                        </div>
+                    </div>
+                }
+
+                @if (sig.Indicator is { } ind)
+                {
+                    <div class="vi-panel soft">
+                        <div class="vi-panel-hdr">
+                            <span class="material-symbols-outlined" style="font-size:16px;color:var(--acc);">analytics</span>
+                            <span class="vi-panel-title">Analyst Indicator</span>
+                            @if (!string.IsNullOrWhiteSpace(ind.Severity))
+                            {
+                                <span class="vi-chip @SevCls(ind.Severity)">@ind.Severity.ToUpperInvariant()</span>
+                            }
+                        </div>
+                        <div class="vi-panel-body vi-stack">
+                            @if (!string.IsNullOrWhiteSpace(ind.ObservationSummary))
+                            {
+                                <div style="font-size:12px;color:var(--t2);line-height:1.6;">@ind.ObservationSummary</div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(ind.AssessmentSummary))
+                            {
+                                <div style="font-size:12px;color:var(--tm);line-height:1.5;border-top:1px solid var(--bd);padding-top:8px;">@ind.AssessmentSummary</div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(ind.RecommendedAction))
+                            {
+                                <div style="font-size:11px;color:var(--p2);border-top:1px solid var(--bd);padding-top:8px;">Action: @ind.RecommendedAction</div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <!-- RIGHT -->
+            <div class="vi-stack" style="flex:1;min-width:240px;max-width:320px;">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Signal Metadata</span></div>
+                    <div class="vi-panel-body">
+                        <div class="vi-detail">
+                            <div class="vi-detail-row"><span class="vi-detail-key">Signal ID</span><span class="vi-detail-val vi-mono" style="font-size:10px;word-break:break-all;">@sig.SignalId</span></div>
+                            <div class="vi-detail-row"><span class="vi-detail-key">Type</span><span class="vi-detail-val">@(sig.SignalType ?? "—")</span></div>
+                            <div class="vi-detail-row"><span class="vi-detail-key">Source</span><span class="vi-detail-val">@(sig.Source ?? "—")</span></div>
+                            @if (!string.IsNullOrWhiteSpace(sig.ClusterId))
+                            {
+                                <div class="vi-detail-row">
+                                    <span class="vi-detail-key">Cluster</span>
+                                    <span class="vi-detail-val vi-mono" style="font-size:10px;word-break:break-all;">@sig.ClusterId</span>
+                                </div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(sig.LocationName))
+                            {
+                                <div class="vi-detail-row"><span class="vi-detail-key">Location</span><span class="vi-detail-val">@sig.LocationName</span></div>
+                            }
+                            @if (sig.LocationLat.HasValue && sig.LocationLon.HasValue)
+                            {
+                                <div class="vi-detail-row">
+                                    <span class="vi-detail-key">Coords</span>
+                                    <span class="vi-detail-val vi-mono" style="font-size:10px;">@sig.LocationLat.Value.ToString("0.0000"), @sig.LocationLon.Value.ToString("0.0000")</span>
+                                </div>
+                            }
+                            <div class="vi-detail-row"><span class="vi-detail-key">Time</span><span class="vi-detail-val vi-mono" style="font-size:10px;">@(sig.Timestamp ?? "—")</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(sig.SourceEventId))
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Source Event</span></div>
+                        <div class="vi-panel-body">
+                            <a class="vi-btn sm primary" href="/events/@Uri.EscapeDataString(sig.SourceEventId)">
+                                Open Event Detail
+                            </a>
+                        </div>
+                    </div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(sig.ClusterId))
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Cluster</span></div>
+                        <div class="vi-panel-body vi-stack">
+                            <div class="vi-mono" style="font-size:10px;word-break:break-all;color:var(--tm);">@sig.ClusterId</div>
+                            <a class="vi-btn sm" href="/correlation">View Correlation Explorer</a>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string? SignalId { get; set; }
+
+    SignalDto? _signal;
+    bool _loading = true;
+    string? _error;
+    CancellationTokenSource _cts = new();
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!string.Equals(_signal?.SignalId, SignalId, StringComparison.OrdinalIgnoreCase))
+            await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        _signal = null;
+        StateHasChanged();
+        try
+        {
+            if (string.IsNullOrWhiteSpace(SignalId))
+            {
+                _error = "No signal ID provided.";
+                return;
+            }
+            _signal = await Api.GetSignalAsync(SignalId, _cts.Token);
+            if (_signal is null) _error = "Signal not found.";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { _error = $"Failed to load signal: {ex.Message}"; }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    public void Dispose() { _cts.Cancel(); _cts.Dispose(); }
+
+    static string ConfCls(double v) => v switch { > 0.7 => "ok", > 0.4 => "warn", _ => "" };
+    static string SentCls(double v) => v switch { > 0.6 => "ok", < 0.4 => "err", _ => "" };
+    static string SevCls(string s) => s.ToLowerInvariant() switch { "critical" => "err", "high" => "warn", _ => "" };
+}

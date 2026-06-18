@@ -1,0 +1,429 @@
+@page "/workspaces/{Slug}"
+@layout AnalystLayout
+@inject WorkspaceService WorkspaceSvc
+@inject NavigationManager Nav
+@inject ToastService Toast
+
+<PageTitle>@(_detail?.Title ?? Slug) | Vision-I</PageTitle>
+
+@if (_loadingDetail)
+{
+    <LoadingState Message="LOADING WORKSPACE" />
+}
+else if (_detail is null)
+{
+    <EmptyState Icon="error_outline" Message="Workspace not found." />
+}
+else
+{
+    <div class="vi-page">
+        <WorkspaceHeader Title="@_detail.Title"
+                         Description="@_detail.Description"
+                         Status="@_detail.Status"
+                         Classification="@_detail.Classification"
+                         OnBack="@(() => Nav.NavigateTo("/workspaces"))">
+            <button class="vi-btn" disabled="@_refreshing" @onclick="RefreshAsync">
+                <span class="material-symbols-outlined" style="font-size:15px;">refresh</span>
+                @(_refreshing ? "Refreshing…" : "Refresh")
+            </button>
+        </WorkspaceHeader>
+
+        <WorkspaceTabNav Tabs="_tabs" ActiveTab="@_activeTab" OnTabChange="SetTab" />
+
+        @if (_loadingTab && !HasTabData(_activeTab))
+        {
+            <LoadingState Message="@($"LOADING {_activeTab.ToUpperInvariant()}")" />
+        }
+        else
+        {
+            @switch (_activeTab)
+            {
+                case "Overview":
+                    <WorkspaceOverviewTab Overview="_overview" Entities="_entities" Sentiment="_sentiment"
+                                          Actions="_actions" Assets="_assets" Slug="@Slug"
+                                          OnNavigateTab="SetTab" />
+                    break;
+                case "Map":
+                    <WorkspaceMapTab Map="_map" Slug="@Slug" />
+                    break;
+                case "Developments":
+                    <WorkspaceDevelopmentsTab Developments="_developments" Slug="@Slug" OnNavigateTab="SetTab" />
+                    break;
+                case "Entities":
+                    <WorkspaceEntitiesTab Entities="_entities" Correlation="_correlation" OnNavigateTab="SetTab" />
+                    break;
+                case "Assets":
+                    <WorkspaceAssetsTab Assets="_assets" Slug="@Slug" />
+                    break;
+                case "Social":
+                    <WorkspaceSocialTab Sentiment="_sentiment" Overview="_overview" Entities="_entities" Developments="_developments" />
+                    break;
+                case "Correlation":
+                    <WorkspaceCorrelationTab Correlation="_correlation" />
+                    break;
+                case "Actions":
+                    <WorkspaceActionsTab Actions="_actions" Slug="@Slug" />
+                    break;
+                case "Searches":
+                    <WorkspaceSearchesTab Slug="@Slug" />
+                    break;
+                case "Tasks":
+                    <WorkspaceTasksTab Slug="@Slug" Actions="_actions" />
+                    break;
+                case "Evidence":
+                    <WorkspaceEvidenceTab Slug="@Slug" />
+                    break;
+                case "Report":
+                    <WorkspaceReportTab Slug="@Slug" Detail="_detail" Overview="_overview"
+                                        Developments="_developments" Entities="_entities"
+                                        Assets="_assets" Correlation="_correlation" />
+                    break;
+            }
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string Slug { get; set; } = "";
+
+    bool   _loadingDetail, _loadingTab, _refreshing;
+    string _activeTab = "Overview";
+
+    static readonly string[] _tabs = ["Overview", "Map", "Developments", "Entities", "Assets", "Social", "Correlation", "Actions", "Searches", "Evidence", "Report", "Tasks"];
+
+    WorkspaceDetailModel?     _detail;
+    WorkspaceOverview?        _overview;
+    WorkspaceMap?             _map;
+    WorkspaceDevelopments?    _developments;
+    WorkspaceEntities?        _entities;
+    WorkspaceAssets?          _assets;
+    WorkspaceSentiment?       _sentiment;
+    WorkspaceCorrelation?     _correlation;
+    WorkspaceActions?         _actions;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _loadingDetail = true;
+        try { _detail = await WorkspaceSvc.GetWorkspaceAsync(Slug); }
+        finally { _loadingDetail = false; }
+        if (_detail is not null)
+        {
+            _loadingTab = true;
+            await InvokeAsync(StateHasChanged);
+            await LoadOverviewProgressiveAsync(force: false);
+        }
+    }
+
+    async Task SetTab(string tab)
+    {
+        if (_activeTab == tab) return;
+        _activeTab = tab;
+        SeedTabFallback(tab);
+        StateHasChanged();
+        await LoadTabAsync(tab);
+    }
+
+    async Task LoadTabAsync(string tab)
+    {
+        SeedTabFallback(tab);
+        _loadingTab = !HasTabData(tab);
+        if (_loadingTab)
+            StateHasChanged();
+        try
+        {
+            switch (tab)
+            {
+                case "Overview":
+                    await LoadOverviewProgressiveAsync(force: false);
+                    break;
+                case "Map":          _map          = await WorkspaceSvc.GetWorkspaceMapAsync(Slug);          break;
+                case "Developments":
+                    _developments = await WorkspaceSvc.GetWorkspaceDevelopmentsAsync(Slug) ?? _developments;
+                    await EnsureOverviewAsync();
+                    EnsureDevelopmentsFromOverview();
+                    break;
+                case "Entities":
+                    var et1 = WorkspaceSvc.GetWorkspaceEntitiesAsync(Slug);
+                    var et2 = WorkspaceSvc.GetWorkspaceCorrelationAsync(Slug);
+                    try { await Task.WhenAll(et1, et2); } catch { }
+                    if (et1.IsCompletedSuccessfully && et1.Result is not null) _entities = et1.Result;
+                    if (et2.IsCompletedSuccessfully && et2.Result is not null) _correlation = et2.Result;
+                    break;
+                case "Assets":      _assets      = await WorkspaceSvc.GetWorkspaceAssetsAsync(Slug);      break;
+                case "Social":
+                    Task<WorkspaceSentiment?> st = WorkspaceSvc.GetWorkspaceSentimentAsync(Slug);
+                    Task<WorkspaceEntities?> se = _entities is null ? WorkspaceSvc.GetWorkspaceEntitiesAsync(Slug) : Task.FromResult<WorkspaceEntities?>(_entities);
+                    Task<WorkspaceDevelopments?> sd = _developments is null ? WorkspaceSvc.GetWorkspaceDevelopmentsAsync(Slug) : Task.FromResult<WorkspaceDevelopments?>(_developments);
+                    try { await Task.WhenAll(st, se, sd); } catch { }
+                    _sentiment    = st.IsCompletedSuccessfully && st.Result is not null ? st.Result : _sentiment;
+                    _entities     = se.IsCompletedSuccessfully && se.Result is not null ? se.Result : _entities;
+                    _developments = sd.IsCompletedSuccessfully && sd.Result is not null ? sd.Result : _developments;
+                    EnsureDevelopmentsFromOverview();
+                    _overview ??= BuildOverviewFromFocusedData();
+                    break;
+                case "Correlation": _correlation = await WorkspaceSvc.GetWorkspaceCorrelationAsync(Slug) ?? _correlation; break;
+                case "Actions":     _actions     = await WorkspaceSvc.GetWorkspaceActionsAsync(Slug) ?? _actions;     break;
+                case "Tasks":
+                    if (_actions is null)
+                        _actions = await WorkspaceSvc.GetWorkspaceActionsAsync(Slug);
+                    break;
+                case "Report":
+                    // Make sure the report has the full workspace picture, not just overview.
+                    if (_developments is null || _entities is null || _assets is null || _correlation is null)
+                        await LoadOverviewEnrichmentAsync();
+                    break;
+            }
+        }
+        catch (Exception ex) { Toast.ShowError($"Failed to load {tab}: {ex.Message}"); }
+        finally
+        {
+            SeedTabFallback(tab);
+            _loadingTab = false;
+        }
+    }
+
+    bool HasTabData(string tab) => tab switch
+    {
+        "Overview"     => _overview is not null,
+        "Map"          => _map is not null,
+        "Developments" => _developments is not null,
+        "Entities"     => _entities is not null,
+        "Assets"       => _assets is not null,
+        "Social"       => _sentiment is not null,
+        "Correlation"  => _correlation is not null,
+        "Actions"      => _actions is not null,
+        "Searches"     => true,
+        "Evidence"     => true,
+        "Report"       => true,
+        "Tasks"        => _actions is not null,
+        _              => false
+    };
+
+    void SeedTabFallback(string tab)
+    {
+        if (_detail is null)
+            return;
+
+        switch (tab)
+        {
+            case "Map":
+                _map ??= new WorkspaceMap(
+                    Slug,
+                    _assets?.TotalAssets ?? 0,
+                    _developments?.EventCount ?? _overview?.EventCount ?? 0,
+                    _detail.GeoFilters.FirstOrDefault(f => f.Name == "primary") ?? _detail.GeoFilters.FirstOrDefault(),
+                    _assets?.AssetItems ?? new(),
+                    new(),
+                    DateTime.UtcNow,
+                    true);
+                break;
+            case "Developments":
+                EnsureDevelopmentsFromOverview();
+                _developments ??= new WorkspaceDevelopments(Slug, 0, null, new(), DateTime.UtcNow, true);
+                break;
+            case "Entities":
+                _entities ??= new WorkspaceEntities(
+                    Slug,
+                    _detail.Entities.Count,
+                    _detail.Entities
+                        .Select(e => new WorkspaceEntityItem(e.DisplayName, e.EntityType, e.IsPrimary ? 1 : 0, e.IsPrimary ? 1 : 0))
+                        .ToList(),
+                    DateTime.UtcNow,
+                    true);
+                _correlation ??= new WorkspaceCorrelation(Slug, 0, 0, new(), new(), new(), DateTime.UtcNow, true);
+                break;
+            case "Assets":
+                _assets ??= new WorkspaceAssets(Slug, 0, 0, 0, 0, new(), DateTime.UtcNow, true);
+                break;
+            case "Social":
+                _sentiment ??= new WorkspaceSentiment(Slug, null, 0, new(), new(), new(), new(), new(), new(), DateTime.UtcNow, true);
+                EnsureDevelopmentsFromOverview();
+                break;
+            case "Correlation":
+                _correlation ??= new WorkspaceCorrelation(Slug, 0, 0, new(), new(), new(), DateTime.UtcNow, true);
+                break;
+            case "Actions":
+            case "Tasks":
+                if (_actions is null)
+                {
+                    var fallbackActions = new List<WorkspaceAction>();
+                    if ((_assets?.AnomalyCount ?? 0) > 0)
+                    {
+                        fallbackActions.Add(new WorkspaceAction(
+                            "Verify anomalous regional assets",
+                            $"{_assets!.AnomalyCount} anomalies are present in the latest workspace asset snapshot.",
+                            "medium",
+                            0.7,
+                            "asset_triage",
+                            new(),
+                            null));
+                    }
+                    if ((_developments?.Events?.Count ?? _overview?.TopEvents?.Count ?? 0) > 0)
+                    {
+                        var evidence = (_developments?.Events ?? _overview?.TopEvents ?? new()).Take(5).Select(e => e.EventId).ToList();
+                        fallbackActions.Add(new WorkspaceAction(
+                            "Triage current priority developments",
+                            "Review the highest risk developments and confirm whether they are connected to workspace entities or assets.",
+                            "medium",
+                            0.65,
+                            "event_triage",
+                            evidence,
+                            _entities?.EntityItems?.FirstOrDefault()?.Name));
+                    }
+                    _actions = new WorkspaceActions(Slug, fallbackActions.Count, fallbackActions, DateTime.UtcNow, true);
+                }
+                break;
+        }
+    }
+
+    async Task LoadOverviewProgressiveAsync(bool force)
+    {
+        if (_overview is not null && !force)
+        {
+            _ = LoadOverviewEnrichmentAsync();
+            return;
+        }
+
+        _loadingTab = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var overviewTask     = WorkspaceSvc.GetWorkspaceOverviewAsync(Slug);
+            var developmentsTask = WorkspaceSvc.GetWorkspaceDevelopmentsAsync(Slug);
+            var assetsTask       = WorkspaceSvc.GetWorkspaceAssetsAsync(Slug);
+
+            try { await Task.WhenAll(overviewTask, developmentsTask, assetsTask); } catch { }
+
+            if (overviewTask.IsCompletedSuccessfully)     _overview     = overviewTask.Result;
+            if (developmentsTask.IsCompletedSuccessfully && developmentsTask.Result is not null) _developments = developmentsTask.Result;
+            if (assetsTask.IsCompletedSuccessfully && assetsTask.Result is not null) _assets = assetsTask.Result;
+
+            EnsureDevelopmentsFromOverview();
+
+            if (_overview is null || _developments?.Events?.Count > 0 || _assets is not null)
+                _overview = BuildOverviewFromFocusedData(_overview);
+        }
+        catch (Exception ex)
+        {
+            Toast.ShowError($"Failed to load overview: {ex.Message}");
+            _overview = BuildOverviewFromFocusedData();
+        }
+        finally
+        {
+            _loadingTab = false;
+            await InvokeAsync(StateHasChanged);
+        }
+
+        _ = LoadOverviewEnrichmentAsync();
+    }
+
+    async Task LoadOverviewEnrichmentAsync()
+    {
+        try
+        {
+            var t1 = _developments is null ? WorkspaceSvc.GetWorkspaceDevelopmentsAsync(Slug) : Task.FromResult<WorkspaceDevelopments?>(_developments);
+            var t2 = WorkspaceSvc.GetWorkspaceEntitiesAsync(Slug);
+            var t3 = WorkspaceSvc.GetWorkspaceSentimentAsync(Slug);
+            var t4 = WorkspaceSvc.GetWorkspaceActionsAsync(Slug);
+            var t5 = WorkspaceSvc.GetWorkspaceAssetsAsync(Slug);
+            var t6 = WorkspaceSvc.GetWorkspaceCorrelationAsync(Slug);
+            try { await Task.WhenAll(t1, t2, t3, t4, t5, t6); } catch { }
+            if (t1.IsCompletedSuccessfully && t1.Result is not null) _developments = t1.Result;
+            if (t2.IsCompletedSuccessfully && t2.Result is not null) _entities     = t2.Result;
+            if (t3.IsCompletedSuccessfully && t3.Result is not null) _sentiment    = t3.Result;
+            if (t4.IsCompletedSuccessfully && t4.Result is not null) _actions      = t4.Result;
+            if (t5.IsCompletedSuccessfully && t5.Result is not null) _assets       = t5.Result;
+            if (t6.IsCompletedSuccessfully && t6.Result is not null) _correlation  = t6.Result;
+            EnsureDevelopmentsFromOverview();
+            _overview = BuildOverviewFromFocusedData(_overview);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { }
+    }
+
+    async Task EnsureOverviewAsync()
+    {
+        if (_overview is not null)
+            return;
+
+        _overview = await WorkspaceSvc.GetWorkspaceOverviewAsync(Slug) ?? _overview;
+    }
+
+    void EnsureDevelopmentsFromOverview()
+    {
+        if ((_developments?.Events?.Count ?? 0) > 0 || _overview?.TopEvents?.Count is not > 0)
+            return;
+
+        _developments = new WorkspaceDevelopments(
+            Slug,
+            Math.Max(_overview.EventCount, _overview.TopEvents.Count),
+            _overview.MaxRiskScore,
+            _overview.TopEvents,
+            _overview.GeneratedAt,
+            _overview.FromCache
+        );
+    }
+
+    WorkspaceOverview BuildOverviewFromFocusedData(WorkspaceOverview? canonical = null)
+    {
+        var events = _developments?.Events ?? new();
+        var topEvents = events
+            .OrderByDescending(e => e.RiskScore ?? 0d)
+            .Take(20)
+            .ToList();
+
+        if (topEvents.Count == 0 && canonical?.TopEvents?.Count > 0)
+            topEvents = canonical.TopEvents
+                .OrderByDescending(e => e.RiskScore ?? 0d)
+                .Take(20)
+                .ToList();
+
+        return new WorkspaceOverview(
+            Slug,
+            _detail?.Title ?? Slug,
+            EventCount: Math.Max(_developments?.EventCount ?? 0, Math.Max(canonical?.EventCount ?? 0, topEvents.Count)),
+            MaxRiskScore: _developments?.MaxRiskScore ?? canonical?.MaxRiskScore ?? topEvents.MaxBy(e => e.RiskScore ?? 0d)?.RiskScore,
+            AssetCount: _assets?.TotalAssets ?? canonical?.AssetCount ?? 0,
+            VesselCount: _assets?.VesselCount ?? canonical?.VesselCount ?? 0,
+            FlightCount: _assets?.FlightCount ?? canonical?.FlightCount ?? 0,
+            SentimentScore: _sentiment?.CombinedSentimentScore ?? canonical?.SentimentScore,
+            NarrativeCount: Math.Max(_correlation?.Narratives?.Count ?? 0, canonical?.NarrativeCount ?? 0),
+            TopEvents: topEvents,
+            SummaryBullets: BuildOverviewBullets(topEvents),
+            TopActor: _entities?.EntityItems?.FirstOrDefault()?.Name ?? canonical?.TopActor,
+            TopNarrative: _correlation?.Narratives?.FirstOrDefault() is { } n ? $"{n.Source} -> {n.Target}" : canonical?.TopNarrative,
+            AnomalyDelta: _assets?.AnomalyCount ?? canonical?.AnomalyDelta ?? 0,
+            GeneratedAt: canonical?.GeneratedAt ?? DateTime.UtcNow,
+            FromCache: canonical?.FromCache ?? false
+        );
+    }
+
+    List<string> BuildOverviewBullets(List<WorkspaceEventItem> events)
+    {
+        var bullets = new List<string>();
+        if (events.Count > 0)
+            bullets.Add($"{events.Count} priority developments are available for the current workspace window.");
+        if (_assets is not null)
+            bullets.Add($"{_assets.TotalAssets} regional assets loaded, including {_assets.AnomalyCount} anomalies.");
+        if (_actions?.ActionItems?.Count > 0)
+            bullets.Add($"{_actions.ActionItems.Count} recommended actions are ready for operator review.");
+        return bullets;
+    }
+
+    async Task RefreshAsync()
+    {
+        _refreshing = true;
+        try
+        {
+            await WorkspaceSvc.RefreshWorkspaceAsync(Slug);
+            if (_activeTab == "Overview")
+                await LoadOverviewProgressiveAsync(force: true);
+            else
+                await LoadTabAsync(_activeTab);
+            Toast.ShowSuccess("Workspace refreshed");
+        }
+        catch (Exception ex) { Toast.ShowError($"Refresh failed: {ex.Message}"); }
+        finally { _refreshing = false; }
+    }
+}

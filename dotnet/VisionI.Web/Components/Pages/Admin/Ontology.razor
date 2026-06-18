@@ -1,0 +1,316 @@
+@page "/admin/ontology"
+@layout AdminLayout
+@inject ApiService Api
+@inject ToastService Toast
+@using System.Text.Json
+
+<PageTitle>Ontology | Vision-I Admin</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Admin / Ontology</div>
+            <h1 class="vi-h1">Knowledge Graph &amp; Ontology</h1>
+            <div class="vi-sub">NEO4J SUMMARY · CYPHER QUERY · SITUATION OVERVIEW</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" disabled="@_loading" @onclick="LoadOverviewAsync">Refresh</button>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="vi-row" style="gap:4px;margin-bottom:12px;">
+        <button class="vi-btn @(_tab == "overview" ? "primary" : "")" @onclick='() => SetTab("overview")'>Overview</button>
+        <button class="vi-btn @(_tab == "cypher"   ? "primary" : "")" @onclick='() => SetTab("cypher")'>Cypher Query</button>
+    </div>
+
+    <!-- ── OVERVIEW ── -->
+    @if (_tab == "overview")
+    {
+        @if (_loading)
+        {
+            <div class="vi-loading">LOADING ONTOLOGY</div>
+        }
+        else if (_overview is null)
+        {
+            <div class="vi-empty">
+                <span class="material-symbols-outlined">device_hub</span>
+                No ontology data (Neo4j may be offline)
+            </div>
+        }
+        else
+        {
+            <!-- Graph stats -->
+            <div class="vi-metrics" style="margin-bottom:12px;">
+                <div class="vi-metric">
+                    <div class="vi-metric-label">Situations</div>
+                    <div class="vi-metric-val accent">@GetInt(_overview.Value, "total", "count", "situation_count")</div>
+                </div>
+                <div class="vi-metric">
+                    <div class="vi-metric-label">Nodes</div>
+                    <div class="vi-metric-val">@GetInt(_overview.Value, "node_count", "nodes")</div>
+                </div>
+                <div class="vi-metric">
+                    <div class="vi-metric-label">Edges</div>
+                    <div class="vi-metric-val">@GetInt(_overview.Value, "edge_count", "edges")</div>
+                </div>
+                <div class="vi-metric">
+                    <div class="vi-metric-label">Entities</div>
+                    <div class="vi-metric-val">@GetInt(_overview.Value, "entity_count", "entities")</div>
+                </div>
+            </div>
+
+            <!-- Top situations -->
+            var sits = GetArr(_overview.Value, "situations", "items", "results");
+            @if (sits.Count > 0)
+            {
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Top Situations</span></div>
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead>
+                                <tr>
+                                    <th>Title</th>
+                                    <th>Severity</th>
+                                    <th>Score</th>
+                                    <th>Events</th>
+                                    <th>Actors</th>
+                                    <th>Region</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var s in sits)
+                                {
+                                    var sev = GetStr(s, "severity", "risk_level");
+                                    <tr>
+                                        <td class="vi-td-title vi-trunc" style="max-width:280px;">@GetStr(s, "title", "summary", "label")</td>
+                                        <td><span class="vi-chip @SevCls(sev)">@sev.ToUpperInvariant()</span></td>
+                                        <td class="vi-td-mono">@GetDbl(s, "score", "priority_score", "escalation_score").ToString("0.000")</td>
+                                        <td class="vi-td-mono vi-faint">@GetStr(s, "event_count", "events")</td>
+                                        <td class="vi-td-mono vi-faint">@GetStr(s, "actor_count", "actors")</td>
+                                        <td class="vi-td-mono vi-faint vi-trunc" style="max-width:120px;">@GetStr(s, "region", "location", "primary_region")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            }
+
+            <!-- Raw graph snapshot if no situations -->
+            @if (sits.Count == 0)
+            {
+                <div class="vi-panel soft">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Raw Ontology Data</span></div>
+                    <div class="vi-panel-body">
+                        <pre style="font:400 11px/1.6 var(--mono);color:var(--t2);white-space:pre-wrap;word-break:break-all;overflow:auto;max-height:400px;">@_overview.Value.ToString()</pre>
+                    </div>
+                </div>
+            }
+        }
+    }
+
+    <!-- ── CYPHER QUERY ── -->
+    @if (_tab == "cypher")
+    {
+        <div class="vi-split" style="flex:1;min-height:0;">
+            <div class="vi-stack" style="min-height:0;">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Cypher Query</span>
+                        <span class="vi-chip warn">Read-Only</span>
+                    </div>
+                    <div class="vi-panel-body vi-stack">
+                        <textarea class="vi-input" rows="8"
+                                  style="font:400 12px/1.6 var(--mono);resize:vertical;min-height:120px;"
+                                  placeholder="MATCH (n) RETURN n LIMIT 25"
+                                  @bind="_cypher"></textarea>
+
+                        <div class="vi-row" style="gap:8px;flex-wrap:wrap;">
+                            <button class="vi-btn primary" disabled="@(_cypherLoading || string.IsNullOrWhiteSpace(_cypher))"
+                                    @onclick="ExecuteCypherAsync">
+                                @(_cypherLoading ? "Running…" : "Execute")
+                            </button>
+                            <button class="vi-btn sm" @onclick="() => _cypher = _examples[0]">Example: Actors</button>
+                            <button class="vi-btn sm" @onclick="() => _cypher = _examples[1]">Example: Events</button>
+                            <button class="vi-btn sm" @onclick="() => _cypher = _examples[2]">Example: Relationships</button>
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(_cypherError))
+                        {
+                            <div class="vi-panel-body" style="background:var(--err-bg,rgba(248,113,113,.08));border-radius:4px;padding:8px;">
+                                <span class="vi-td-mono err" style="font-size:11px;">@_cypherError</span>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <div class="vi-panel soft">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Cypher Examples</span></div>
+                    <div class="vi-panel-body">
+                        <div style="font-size:12px;color:var(--tm);line-height:1.7;">
+                            <div>Only <strong>read operations</strong> permitted. MATCH, RETURN, WHERE, WITH, ORDER BY, LIMIT, SKIP, CALL, UNION.</div>
+                            <div style="margin-top:6px;">Write operations (CREATE, MERGE, SET, DELETE, REMOVE, DROP) are blocked.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="vi-panel" style="flex:1;min-height:0;overflow:auto;">
+                <div class="vi-panel-hdr">
+                    <span class="vi-panel-title">Results</span>
+                    @if (_cypherResult.HasValue)
+                    {
+                        <span class="vi-chip info">@GetInt(_cypherResult.Value, "count", "total") rows</span>
+                    }
+                </div>
+
+                @if (_cypherLoading)
+                {
+                    <div class="vi-loading" style="padding:24px;">EXECUTING</div>
+                }
+                else if (_cypherResult.HasValue)
+                {
+                    var rows = GetArr(_cypherResult.Value, "results", "rows", "data", "records");
+                    var cols = GetArr(_cypherResult.Value, "columns", "keys", "fields");
+
+                    @if (rows.Count == 0)
+                    {
+                        <div class="vi-empty">Query returned no results</div>
+                    }
+                    else if (cols.Count > 0)
+                    {
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead>
+                                    <tr>
+                                        @foreach (var c in cols)
+                                        {
+                                            <th>@c.ToString()</th>
+                                        }
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var row in rows.Take(200))
+                                    {
+                                        <tr>
+                                            @foreach (var c in cols)
+                                            {
+                                                var key = c.GetString() ?? c.ToString();
+                                                <td class="vi-td-mono" style="font-size:11px;">
+                                                    @(row.TryGetProperty(key, out var cell) ? cell.ToString() : "--")
+                                                </td>
+                                            }
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                    else
+                    {
+                        <!-- No column metadata — show raw JSON -->
+                        <div class="vi-panel-body">
+                            <pre style="font:400 11px/1.6 var(--mono);color:var(--t2);white-space:pre-wrap;word-break:break-all;overflow:auto;max-height:500px;">@_cypherResult.Value.ToString()</pre>
+                        </div>
+                    }
+                }
+                else
+                {
+                    <div class="vi-empty">Run a query to see results</div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    string _tab = "overview";
+    bool _loading, _cypherLoading;
+
+    JsonElement? _overview;
+    JsonElement? _cypherResult;
+    string _cypher = "";
+    string _cypherError = "";
+
+    readonly string[] _examples =
+    [
+        "MATCH (a:Actor) RETURN a.name AS name, a.type AS type, a.influence_score AS score ORDER BY score DESC LIMIT 25",
+        "MATCH (e:Event) RETURN e.event_id AS id, e.title AS title, e.source AS source, e.timestamp AS ts ORDER BY ts DESC LIMIT 25",
+        "MATCH (a:Actor)-[r]->(b) RETURN a.name AS from, type(r) AS relation, b.name AS to LIMIT 50",
+    ];
+
+    protected override async Task OnInitializedAsync() => await LoadOverviewAsync();
+
+    async Task SetTab(string t)
+    {
+        _tab = t;
+        if (t == "overview" && _overview is null)
+            await LoadOverviewAsync();
+    }
+
+    async Task LoadOverviewAsync()
+    {
+        _loading = true;
+        try { _overview = await Api.GetOntologyOverviewAsync(limit: 25); }
+        catch (Exception ex) { Toast.ShowError($"Ontology: {ex.Message}"); }
+        finally { _loading = false; }
+    }
+
+    async Task ExecuteCypherAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_cypher)) return;
+        _cypherLoading = true;
+        _cypherError   = "";
+        _cypherResult  = null;
+        try
+        {
+            _cypherResult = await Api.PostAsync<JsonElement?>("api/ontology/cypher", new { query = _cypher.Trim() });
+        }
+        catch (Exception ex)
+        {
+            _cypherError = ex.Message;
+        }
+        finally { _cypherLoading = false; }
+    }
+
+    static string GetStr(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v))
+                return v.ValueKind == JsonValueKind.String ? v.GetString() ?? "--" : v.ToString();
+        return "--";
+    }
+
+    static double GetDbl(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number)
+                return v.GetDouble();
+        return 0;
+    }
+
+    static int GetInt(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i))
+                return i;
+        return 0;
+    }
+
+    static List<JsonElement> GetArr(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Array)
+                return v.EnumerateArray().ToList();
+        return new();
+    }
+
+    static string SevCls(string? s) => s?.ToLowerInvariant() switch
+    {
+        "critical" or "high" => "err",
+        "medium"             => "warn",
+        "low"                => "ok",
+        _                    => ""
+    };
+}

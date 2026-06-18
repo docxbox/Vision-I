@@ -1,0 +1,173 @@
+@page "/assets"
+@layout AnalystLayout
+@inject ApiService Api
+@inject ToastService Toast
+@inject NavigationManager Nav
+
+<PageTitle>Assets | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Detect / Assets</div>
+            <h1 class="vi-h1">Tracked Assets</h1>
+            <div class="vi-sub">AIRCRAFT · VESSELS · FACILITIES</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" disabled="@_loading" @onclick="LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    <!-- Metrics -->
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Total</div>
+            <div class="vi-metric-val accent">@(_counts?.Total ?? 0)</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Aircraft</div>
+            <div class="vi-metric-val">@(_counts?.Aircraft ?? 0)</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Vessels</div>
+            <div class="vi-metric-val">@(_counts?.Vessel ?? 0)</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Facilities</div>
+            <div class="vi-metric-val">@(_counts?.Facility ?? 0)</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Showing</div>
+            <div class="vi-metric-val">@(_assets?.Assets.Count ?? 0)</div>
+        </div>
+    </div>
+
+    <!-- Filter bar -->
+    <div class="vi-row" style="gap:8px;margin-bottom:12px;">
+        @foreach (var t in _types)
+        {
+            <button class="vi-btn @(_typeFilter == t ? "primary" : "")" @onclick="() => SetType(t)">
+                @t
+            </button>
+        }
+    </div>
+
+    @if (_loading)
+    {
+        <div class="vi-loading">LOADING ASSETS</div>
+    }
+    else if (_assets is null || _assets.Assets.Count == 0)
+    {
+        <div class="vi-empty">
+            <span class="material-symbols-outlined">directions_boat</span>
+            No tracked assets in current filter
+        </div>
+    }
+    else
+    {
+        <div class="vi-panel" style="flex:1;min-height:0;">
+            <div class="vi-panel-hdr">
+                <span class="vi-panel-title">Asset Registry</span>
+                <span class="vi-chip">@(_assets?.Assets.Count ?? 0)</span>
+            </div>
+            <div class="vi-tbl-wrap">
+                <table class="vi-table">
+                    <thead>
+                        <tr>
+                            <th>ID / Callsign</th>
+                            <th>Type</th>
+                            <th>Name</th>
+                            <th>Origin</th>
+                            <th>Position</th>
+                            <th>Alt (m)</th>
+                            <th>Speed (kt)</th>
+                            <th>Hdg</th>
+                            <th>Last Seen</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var a in _assets!.Assets)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="vi-td-title vi-trunc" style="max-width:160px;">@(a.Callsign ?? a.Identifier ?? a.AssetId)</div>
+                                    @if (a.Callsign != null && a.Identifier != null)
+                                    {
+                                        <div class="vi-td-note">@a.Identifier</div>
+                                    }
+                                </td>
+                                <td><span class="vi-chip @TypeCls(a.AssetType)">@(a.AssetType?.ToUpperInvariant() ?? "--")</span></td>
+                                <td class="vi-td-mono vi-trunc" style="max-width:140px;">@(a.Name ?? "--")</td>
+                                <td class="vi-td-mono vi-faint">@(a.OriginCountry ?? "--")</td>
+                                <td class="vi-td-mono vi-faint">
+                                    @if (a.LastLat.HasValue && a.LastLon.HasValue)
+                                    {
+                                        @($"{a.LastLat:F3}, {a.LastLon:F3}")
+                                    }
+                                    else { @("--") }
+                                </td>
+                                <td class="vi-td-mono vi-faint">@(a.LastAltitude.HasValue ? ((int)a.LastAltitude.Value).ToString("N0") : "--")</td>
+                                <td class="vi-td-mono vi-faint">@(a.LastSpeed.HasValue ? ((int)a.LastSpeed.Value).ToString() : "--")</td>
+                                <td class="vi-td-mono vi-faint">@(a.LastHeading.HasValue ? ((int)a.LastHeading.Value) + "°" : "--")</td>
+                                <td class="vi-td-mono vi-faint">@FmtTime(a.LastSeen)</td>
+                                <td>
+                                    @if (!string.IsNullOrWhiteSpace(a.AssetId))
+                                    {
+                                        <button class="vi-btn sm" @onclick="() => GoDetail(a.AssetId!)">Detail</button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    bool _loading;
+    string _typeFilter = "All";
+    AssetsResponse? _assets;
+    AssetCountsDto? _counts;
+    readonly string[] _types = ["All", "aircraft", "vessel", "facility"];
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var t1 = Api.GetAssetsAsync(_typeFilter == "All" ? null : _typeFilter, 200);
+            var t2 = Api.GetAssetCountsAsync();
+            await Task.WhenAll(t1, t2);
+            _assets = t1.Result;
+            _counts  = t2.Result;
+        }
+        catch (Exception ex) { Toast.ShowError($"Assets load failed: {ex.Message}"); }
+        finally { _loading = false; }
+    }
+
+    async Task SetType(string t) { _typeFilter = t; await LoadAsync(); }
+    void GoDetail(string id) => Nav.NavigateTo("/assets/" + Uri.EscapeDataString(id));
+
+    static string FmtTime(string? raw)
+    {
+        if (!DateTime.TryParse(raw, out var dt)) return "--";
+        var diff = DateTime.UtcNow - dt.ToUniversalTime();
+        return diff.TotalMinutes < 1 ? "just now"
+             : diff.TotalHours   < 1 ? $"{(int)diff.TotalMinutes}m ago"
+             : diff.TotalDays    < 1 ? $"{(int)diff.TotalHours}h ago"
+             :                         $"{(int)diff.TotalDays}d ago";
+    }
+
+    static string TypeCls(string? t) => t?.ToLowerInvariant() switch
+    {
+        "aircraft" => "info",
+        "vessel"   => "ok",
+        "facility" => "warn",
+        _          => ""
+    };
+}

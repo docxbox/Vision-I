@@ -1,0 +1,79 @@
+# Use PyPI for everything, but pull CPU-only Torch wheels (avoid CUDA/NVIDIA deps in Docker).
+--index-url https://pypi.org/simple
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# ── Web framework ─────────────────────────────
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+slowapi                     # Rate limiting for FastAPI
+
+# ── HTTP ──────────────────────────────────────
+requests
+aiohttp
+httpx                       # Async HTTP for health checks
+
+# ── Data sources ──────────────────────────────
+yfinance
+ccxt
+yt-dlp
+newspaper3k
+python-dateutil
+feedparser                  # RSS/Atom feed parsing (rss extractor)
+telethon                    # Telegram MTProto client (optional, telegram extractor)
+pycountry                   # Country normalization for heatmaps
+
+# ── NLP ───────────────────────────────────────────────────────────────────────
+# Multilingual NER:  Davlan/xlm-roberta-base-ner-hrl
+# Multilingual sentiment: cardiffnlp/twitter-xlm-roberta-base-sentiment
+# After install, optionally also run: python -m spacy download en_core_web_sm
+spacy
+transformers
+torch==2.11.0+cpu
+rapidfuzz
+sentencepiece              # Tokenizer for xlm-roberta NER model
+tiktoken                   # Fallback tokenizer for HuggingFace models
+protobuf                   # Required by sentencepiece
+
+
+# ── Embeddings ────────────────────────────────
+sentence-transformers>=2.2.0
+pgvector>=0.2.0
+
+# ── Database ──────────────────────────────────
+sqlalchemy[asyncio]
+asyncpg
+psycopg2-binary
+alembic
+neo4j
+
+# ── Scheduling ────────────────────────────────
+apscheduler
+
+# ── Geospatial / orbital mechanics (satellite passes) ─────────────────────────
+skyfield
+
+# ── Redis (event bus + caching) ───────────────
+redis[hiredis]
+
+# ── Config / utils ────────────────────────────
+python-dotenv
+typing-extensions
+lxml
+lxml_html_clean
+tenacity
+
+# ── Telemetry & Observability ─────────────────
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-instrumentation-fastapi
+prometheus-client
+
+# ── PDF (export + ingestion) ──────────────────
+reportlab
+pdfplumber
+
+# ── Testing ───────────────────────────────────
+pytest
+pytest-asyncio

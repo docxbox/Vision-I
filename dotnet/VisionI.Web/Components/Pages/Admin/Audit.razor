@@ -1,0 +1,170 @@
+@page "/admin/audit"
+@layout AdminLayout
+@inject AdminAuditService Svc
+@implements IDisposable
+
+<PageTitle>Audit | Vision-I Admin</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Admin / Audit</div>
+            <h1 class="vi-h1">Audit Trail</h1>
+            <div class="vi-sub">ANALYST ACTIONS · IMMUTABLE LOG</div>
+        </div>
+        <div class="vi-page-actions">
+            <span class="vi-chip info">@Svc.Total entries</span>
+            <button class="vi-btn" disabled="@Svc.Loading" @onclick="ApplyFiltersAsync">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-filter-bar">
+        <input class="vi-input sm" placeholder="Filter by action…" style="width:160px;"
+               value="@Svc.ActionFilter"
+               @onchange="e => { Svc.ActionFilter = e.Value?.ToString() ?? string.Empty; }"
+               @onkeyup="OnKeyUp" />
+        <input class="vi-input sm" placeholder="Filter by user…" style="width:160px;"
+               value="@Svc.UserFilter"
+               @onchange="e => { Svc.UserFilter = e.Value?.ToString() ?? string.Empty; }"
+               @onkeyup="OnKeyUp" />
+        <select class="vi-select sm" style="width:140px;" value="@_entityTypeFilter"
+                @onchange="e => { _entityTypeFilter = e.Value?.ToString() ?? string.Empty; }">
+            <option value="">All entity types</option>
+            @foreach (var t in EntityTypes())
+            {
+                <option value="@t">@t</option>
+            }
+        </select>
+        <button class="vi-btn sm" @onclick="ApplyFiltersAsync">Apply</button>
+    </div>
+
+    @if (Svc.Loading)
+    {
+        <div class="vi-loading">LOADING AUDIT</div>
+    }
+    else if (!Filtered().Any())
+    {
+        <div class="vi-empty">
+            <span class="material-symbols-outlined">history</span>
+            No audit entries found
+        </div>
+    }
+    else
+    {
+        <div class="vi-panel" style="flex:1;min-height:0;">
+            <div class="vi-panel-hdr">
+                <span class="vi-panel-title">Audit Log</span>
+                <span class="vi-chip">@Svc.Total</span>
+            </div>
+            <div class="vi-tbl-wrap">
+                <table class="vi-table">
+                    <thead>
+                        <tr>
+                            <th>Action</th>
+                            <th>User</th>
+                            <th>Entity</th>
+                            <th>Link</th>
+                            <th>IP</th>
+                            <th>Timestamp</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var e in Filtered())
+                        {
+                            var action     = GetStr(e, "action");
+                            var user       = GetStr(e, "user_email");
+                            var entityType = GetStr(e, "entity_type");
+                            var entityId   = GetStr(e, "entity_id");
+                            var ip         = GetStr(e, "ip_address");
+                            var ts         = GetStr(e, "created_at");
+                            var detail     = GetStr(e, "detail", "description", "message");
+                            var href       = EntityHref(entityType, entityId);
+                            <tr>
+                                <td><span class="vi-chip info">@action</span></td>
+                                <td class="vi-td-mono vi-faint">@user</td>
+                                <td>
+                                    <div class="vi-td-mono" style="font-size:11px;">@entityType</div>
+                                    @if (entityId != "—")
+                                    {
+                                        <div class="vi-td-note vi-trunc" style="max-width:140px;font-size:10px;">@entityId</div>
+                                    }
+                                </td>
+                                <td>
+                                    @if (href is not null)
+                                    {
+                                        <a class="vi-btn sm" href="@href">View →</a>
+                                    }
+                                </td>
+                                <td class="vi-td-mono vi-faint">@ip</td>
+                                <td class="vi-td-mono vi-faint">@FmtTime(ts)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    string _entityTypeFilter = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.LoadAsync();
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+
+    async Task ApplyFiltersAsync() => await Svc.LoadAsync();
+
+    async Task OnKeyUp(KeyboardEventArgs e) { if (e.Key == "Enter") await Svc.LoadAsync(); }
+
+    IEnumerable<System.Text.Json.JsonElement> Filtered()
+    {
+        var entries = Svc.Entries();
+        if (!string.IsNullOrWhiteSpace(_entityTypeFilter))
+            entries = entries.Where(e => GetStr(e, "entity_type").Equals(_entityTypeFilter, StringComparison.OrdinalIgnoreCase)).ToList();
+        return entries;
+    }
+
+    IEnumerable<string> EntityTypes()
+        => Svc.Entries()
+            .Select(e => GetStr(e, "entity_type"))
+            .Where(t => t != "—")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(t => t);
+
+    static string? EntityHref(string entityType, string entityId)
+    {
+        if (entityId == "—" || string.IsNullOrWhiteSpace(entityId)) return null;
+        return entityType.ToLowerInvariant() switch
+        {
+            "event"        => $"/events/{Uri.EscapeDataString(entityId)}",
+            "alert"        => "/alerts",
+            "triage"       => "/triage",
+            "decision"     => "/decisions",
+            "signal"       => $"/signals/{Uri.EscapeDataString(entityId)}",
+            "user"         => "/admin/users",
+            "playbook"     => "/playbooks",
+            "ingest_job"   => "/ingest",
+            _              => null
+        };
+    }
+
+    static string GetStr(System.Text.Json.JsonElement el, params string[] props)
+    {
+        foreach (var prop in props)
+            if (el.TryGetProperty(prop, out var v)) return v.GetString() ?? "—";
+        return "—";
+    }
+
+    static string FmtTime(string ts)
+    {
+        if (ts == "—" || string.IsNullOrWhiteSpace(ts)) return "--";
+        return ts.Length >= 16 ? ts[..16].Replace("T", " ") : ts;
+    }
+
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+}

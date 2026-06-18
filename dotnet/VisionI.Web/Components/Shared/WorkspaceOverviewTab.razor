@@ -1,0 +1,270 @@
+@inject NavigationManager Nav
+
+@if (Overview is null)
+{
+    <EmptyState Message="No overview data." />
+}
+else
+{
+    var age         = DateTime.UtcNow - Overview.GeneratedAt;
+    var ageLbl      = age.TotalMinutes < 1  ? "just now"
+                    : age.TotalMinutes < 60 ? $"{(int)age.TotalMinutes}m ago"
+                    : age.TotalHours < 24   ? $"{(int)age.TotalHours}h ago"
+                    : $"{(int)age.TotalDays}d ago";
+    var stale       = age.TotalMinutes > 10;
+    var execBullets = Overview.SummaryBullets?.Count > 0
+        ? Overview.SummaryBullets.Select(b => (b, (string?)"chevron_right")).ToList()
+        : BuildExecutiveSummary();
+    var topAction   = Actions?.ActionItems?.FirstOrDefault(a => !string.IsNullOrEmpty(a.Priority));
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:6px 12px;background:var(--s2);border-radius:var(--r1);font-size:11px;">
+        <span class="material-symbols-outlined" style="font-size:13px;color:@(stale ? "var(--warn)" : "var(--ok)");">schedule</span>
+        <span style="color:var(--tm);">Briefing</span>
+        <strong style="color:@(stale ? "var(--warn)" : "var(--t)");">@ageLbl</strong>
+        @if (Overview.FromCache) { <span class="vi-chip" style="font-size:9px;">CACHED</span> }
+        <span style="margin-left:auto;color:var(--tf);">@Overview.GeneratedAt.ToString("HH:mm") UTC</span>
+    </div>
+
+    @if (topAction is not null)
+    {
+        var taBdr = topAction.Priority switch { "high" => "var(--err)", "medium" => "var(--warn)", _ => "var(--accent)" };
+        var taCls = topAction.Priority switch { "high" => "err", "medium" => "warn", _ => "" };
+        <div style="margin-bottom:14px;padding:12px 16px;background:var(--s2);border:1px solid var(--bd);border-left:3px solid @taBdr;border-radius:var(--r2);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:0;">
+                <div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--tf);margin-bottom:3px;">Top Priority Action</div>
+                <div style="font-size:13px;font-weight:600;line-height:1.4;color:var(--t);">@topAction.Title</div>
+                <div style="font-size:11px;color:var(--tf);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">@topAction.Rationale</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;">
+                <span class="vi-chip @taCls" style="text-transform:uppercase;font-size:10px;">@topAction.Priority</span>
+                <button class="vi-btn sm primary" @onclick='() => OnNavigateTab.InvokeAsync("Actions")'>Act →</button>
+            </div>
+        </div>
+    }
+
+    @if (execBullets.Count > 0)
+    {
+        <div class="vi-panel" style="margin-bottom:16px;border-left:3px solid var(--accent);">
+            <div class="vi-panel-hdr">
+                <span class="material-symbols-outlined" style="font-size:15px;color:var(--acc);">summarize</span>
+                <span class="vi-panel-title">Situation Assessment</span>
+            </div>
+            <div class="vi-panel-body vi-stack" style="gap:6px;">
+                @foreach (var (text, icon) in execBullets)
+                {
+                    <div style="display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--t2);">
+                        <span class="material-symbols-outlined" style="font-size:14px;color:var(--acc);flex-shrink:0;margin-top:1px;">@(icon ?? "chevron_right")</span>
+                        @text
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    @if (Overview.TopEvents.Any())
+    {
+        <div style="margin-bottom:16px;">
+            <div class="vi-kicker" style="margin-bottom:10px;">Priority Developments</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;">
+                @foreach (var ev in Overview.TopEvents.Take(3))
+                {
+                    var rCls   = ev.RiskScore >= 0.7 ? "err" : ev.RiskScore >= 0.4 ? "warn" : "";
+                    var tsShort = ev.Timestamp is { Length: > 10 } ? ev.Timestamp[..16].Replace("T", " ") : (ev.Timestamp ?? "");
+                    <div class="vi-panel" style="padding:0;">
+                        <div class="vi-panel-hdr" style="padding:10px 12px;">
+                            <div class="vi-td-title vi-trunc" style="flex:1;max-width:200px;font-size:12px;">@ev.Title</div>
+                            @if (ev.RiskScore.HasValue) { <span class="vi-chip @rCls">@ev.RiskScore.Value.ToString("F2")</span> }
+                        </div>
+                        <div style="padding:0 12px 10px;">
+                            <div class="vi-kicker" style="margin-bottom:6px;">
+                                @ev.Source
+                                @if (!string.IsNullOrWhiteSpace(tsShort)) { <span> · @tsShort</span> }
+                            </div>
+                            <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;">
+                                @if (!string.IsNullOrWhiteSpace(ev.EventType)) { <span class="vi-chip">@ev.EventType</span> }
+                                @if (!string.IsNullOrWhiteSpace(ev.Region))    { <span class="vi-chip info">@ev.Region</span> }
+                            </div>
+                            <a class="vi-btn sm primary" href="/events/@Uri.EscapeDataString(ev.EventId)?from=@Uri.EscapeDataString(Slug)">Investigate →</a>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    <div class="vi-metrics" style="margin-bottom:16px;">
+        <div class="vi-metric"><div class="vi-metric-label">Events</div><div class="vi-metric-val accent">@Overview.EventCount</div></div>
+        <div class="vi-metric"><div class="vi-metric-label">Assets</div><div class="vi-metric-val">@Overview.AssetCount</div></div>
+        <div class="vi-metric"><div class="vi-metric-label">Vessels</div><div class="vi-metric-val">@Overview.VesselCount</div></div>
+        <div class="vi-metric"><div class="vi-metric-label">Flights</div><div class="vi-metric-val">@Overview.FlightCount</div></div>
+        @if (Assets is not null)
+        {
+            <div class="vi-metric">
+                <div class="vi-metric-label">Anomalies</div>
+                <div class="vi-metric-val @(Assets.AnomalyCount > 0 ? "err" : "")">@Assets.AnomalyCount</div>
+            </div>
+        }
+        <div class="vi-metric">
+            <div class="vi-metric-label">Sentiment</div>
+            <div class="vi-metric-val @(Overview.SentimentScore > 0.55 ? "ok" : Overview.SentimentScore < 0.45 ? "err" : "warn")">
+                @(Overview.SentimentScore.HasValue ? $"{Overview.SentimentScore.Value:P0}" : "—")
+            </div>
+        </div>
+        <div class="vi-metric"><div class="vi-metric-label">Narratives</div><div class="vi-metric-val">@Overview.NarrativeCount</div></div>
+        @if (Overview.MaxRiskScore.HasValue)
+        {
+            <div class="vi-metric">
+                <div class="vi-metric-label">Max Risk</div>
+                <div class="vi-metric-val @(Overview.MaxRiskScore.Value >= 0.7 ? "err" : "warn")">@Overview.MaxRiskScore.Value.ToString("F2")</div>
+            </div>
+        }
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:start;">
+        <!-- Key Actors -->
+        <div class="vi-panel">
+            <div class="vi-panel-hdr">
+                <span class="vi-panel-title">Key Actors</span>
+                <button class="vi-btn sm" @onclick='() => OnNavigateTab.InvokeAsync("Entities")'>All →</button>
+            </div>
+            @if (Entities?.EntityItems?.Any() == true)
+            {
+                <div class="vi-stack" style="padding:8px 12px;gap:6px;">
+                    @foreach (var ent in Entities.EntityItems.Take(5))
+                    {
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <div>
+                                <div style="font-size:12px;font-weight:500;">@ent.Name</div>
+                                @if (!string.IsNullOrWhiteSpace(ent.EntityType))
+                                {
+                                    <div style="font-size:10px;color:var(--tf);">@ent.EntityType</div>
+                                }
+                            </div>
+                            <div style="text-align:right;font-size:11px;">
+                                <div style="color:var(--acc);">@ent.Count mentions</div>
+                                <div style="color:var(--tf);">@ent.EventCount events</div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+            else { <EmptyState Message="No actor data." /> }
+        </div>
+
+        <!-- Social Shift -->
+        <div class="vi-panel">
+            <div class="vi-panel-hdr">
+                <span class="vi-panel-title">Social Shift</span>
+                <button class="vi-btn sm" @onclick='() => OnNavigateTab.InvokeAsync("Social")'>Full →</button>
+            </div>
+            @if (Sentiment is not null)
+            {
+                var cs   = Sentiment.CombinedSentimentScore;
+                var cCls = cs > 0.55 ? "ok" : cs < 0.45 ? "err" : "warn";
+                var cLbl = cs > 0.55 ? "Positive" : cs < 0.45 ? "Negative" : "Neutral";
+                <div class="vi-panel-body vi-stack" style="gap:8px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <span style="font-size:12px;color:var(--tm);">Combined</span>
+                        <span class="vi-chip @cCls">@cLbl @(cs.HasValue ? $"({cs.Value:P0})" : "")</span>
+                    </div>
+                    @if (Sentiment.Reddit.Any())
+                    {
+                        var lr = Sentiment.Reddit.Last();
+                        var lrCls = lr.AvgScore > 0.55 ? "ok" : lr.AvgScore < 0.45 ? "err" : "warn";
+                        <div style="display:flex;justify-content:space-between;font-size:11px;">
+                            <span style="color:var(--tm);">Reddit latest</span>
+                            <span class="vi-chip @lrCls" style="font-size:10px;">@((int)(lr.AvgScore*100))% · @lr.EventCount posts</span>
+                        </div>
+                    }
+                    @if (Sentiment.Youtube.Any())
+                    {
+                        var ly = Sentiment.Youtube.Last();
+                        var lyCls = ly.AvgScore > 0.55 ? "ok" : ly.AvgScore < 0.45 ? "err" : "warn";
+                        <div style="display:flex;justify-content:space-between;font-size:11px;">
+                            <span style="color:var(--tm);">YouTube latest</span>
+                            <span class="vi-chip @lyCls" style="font-size:10px;">@((int)(ly.AvgScore*100))% · @ly.EventCount posts</span>
+                        </div>
+                    }
+                    <div style="font-size:12px;color:var(--t2);font-style:italic;border-top:1px solid var(--bd);padding-top:6px;">@BuildSocialPreview()</div>
+                </div>
+            }
+            else { <EmptyState Message="No social data." /> }
+        </div>
+
+        <!-- Actions preview -->
+        <div class="vi-panel">
+            <div class="vi-panel-hdr">
+                <span class="vi-panel-title">Actions</span>
+                <button class="vi-btn sm" @onclick='() => OnNavigateTab.InvokeAsync("Actions")'>All →</button>
+            </div>
+            @if (Actions?.ActionItems?.Any() == true)
+            {
+                <div class="vi-stack" style="padding:8px 12px;gap:8px;">
+                    @foreach (var act in Actions.ActionItems.Take(3))
+                    {
+                        var aCls = act.Priority switch { "high" => "err", "medium" => "warn", _ => "" };
+                        <div style="display:flex;gap:8px;align-items:flex-start;">
+                            <span class="vi-chip @aCls" style="flex-shrink:0;font-size:10px;text-transform:uppercase;">@act.Priority</span>
+                            <div>
+                                <div style="font-size:12px;font-weight:500;line-height:1.3;">@act.Title</div>
+                                <div style="font-size:10px;color:var(--tf);margin-top:2px;">@((int)(act.Confidence*100))% confidence</div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+            else { <EmptyState Message="No actions available." /> }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public WorkspaceOverview?    Overview        { get; set; }
+    [Parameter] public WorkspaceEntities?    Entities        { get; set; }
+    [Parameter] public WorkspaceSentiment?   Sentiment       { get; set; }
+    [Parameter] public WorkspaceActions?     Actions         { get; set; }
+    [Parameter] public WorkspaceAssets?      Assets          { get; set; }
+    [Parameter] public string               Slug            { get; set; } = "";
+    [Parameter] public EventCallback<string> OnNavigateTab   { get; set; }
+
+    List<(string text, string? icon)> BuildExecutiveSummary()
+    {
+        var b = new List<(string, string?)>();
+        if (Overview is null) return b;
+
+        if (Overview.MaxRiskScore >= 0.7)
+            b.Add(($"{Overview.EventCount} events tracked — max risk {Overview.MaxRiskScore.Value:F2} indicates elevated threat.", "warning"));
+        else if (Overview.EventCount > 0)
+            b.Add(($"{Overview.EventCount} events in current feed window.", "event"));
+
+        if (Assets?.AnomalyCount > 0)
+            b.Add(($"{Assets.AnomalyCount} asset anomal{(Assets.AnomalyCount == 1 ? "y" : "ies")} detected in the area of interest.", "crisis_alert"));
+        else if (Assets is not null)
+            b.Add(("No asset anomalies detected in the current time window.", "check_circle"));
+
+        if (Sentiment?.CombinedSentimentScore < 0.45)
+            b.Add(($"Social sentiment trending negative ({Sentiment.CombinedSentimentScore.Value:P0}) across monitored platforms.", "sentiment_dissatisfied"));
+        else if (Sentiment?.CombinedSentimentScore > 0.55)
+            b.Add(($"Social sentiment broadly positive ({Sentiment.CombinedSentimentScore.Value:P0}).", "sentiment_satisfied"));
+
+        if (Overview.NarrativeCount > 0)
+            b.Add(($"{Overview.NarrativeCount} narrative signal{(Overview.NarrativeCount == 1 ? "" : "s")} active.", "campaign"));
+
+        var topEnts = Entities?.EntityItems?.Take(2).Select(e => e.Name).ToList();
+        if (topEnts?.Count > 0)
+            b.Add(($"{string.Join(" and ", topEnts)} are the most referenced entities.", "person"));
+
+        return b;
+    }
+
+    string BuildSocialPreview()
+    {
+        if (Sentiment is null) return "";
+        var cs        = Sentiment.CombinedSentimentScore;
+        var rdTotal   = Sentiment.Reddit.Sum(p => p.EventCount);
+        var ytTotal   = Sentiment.Youtube.Sum(p => p.EventCount);
+        var driver    = rdTotal >= ytTotal ? "Reddit" : "YouTube";
+        var direction = cs > 0.55 ? "positive and stable" : cs < 0.45 ? "negative and active" : "neutral with mixed signals";
+        return $"Social is {direction}. {driver} leads with {Math.Max(rdTotal, ytTotal)} posts.";
+    }
+}

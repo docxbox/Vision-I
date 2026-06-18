@@ -1,0 +1,62 @@
+# docker-compose.prod.yml
+# Production overrides — run with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+version: "3.9"
+
+services:
+
+  python-api:
+    restart: always
+    environment:
+      - APP_ENV=production
+      - LOG_JSON=true
+      - LOG_LEVEL=INFO
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+        reservations:
+          memory: 1G
+
+  dotnet-api:
+    restart: always
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+
+  dotnet-web:
+    restart: always
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+
+  postgres:
+    restart: always
+    ports: []   # remove host exposure in production
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  neo4j:
+    restart: always
+    ports: []   # remove host exposure in production — internal only
+    environment:
+      - NEO4J_server_memory_heap_initial__size=512m
+      - NEO4J_server_memory_heap_max__size=1G
+      - NEO4J_server_memory_pagecache_size=512m
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+    deploy:
+      resources:
+        limits:
+          memory: 2G

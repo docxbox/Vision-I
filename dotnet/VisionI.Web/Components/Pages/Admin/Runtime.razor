@@ -1,0 +1,315 @@
+@page "/admin/runtime"
+@layout AdminLayout
+@inject ApiService Api
+@inject ToastService Toast
+@using System.Text.Json
+
+<PageTitle>Runtime | Vision-I Admin</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Admin / Runtime</div>
+            <h1 class="vi-h1">System Runtime</h1>
+            <div class="vi-sub">PIPELINE · DB · CACHE · NEO4J · LLM · SWARM · DATA FRESHNESS</div>
+        </div>
+        <div class="vi-page-actions">
+            <span class="vi-faint" style="font-size:11px;">@_loadedAt</span>
+            <button class="vi-btn" disabled="@_loading" @onclick="LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="vi-loading">LOADING RUNTIME DATA</div>
+    }
+    else if (_health is null)
+    {
+        <div class="vi-empty">
+            <span class="material-symbols-outlined">warning</span>
+            Runtime data unavailable — .NET API or Python layer offline
+        </div>
+    }
+    else
+    {
+        var h = _health.Value;
+        var overallStatus = GetStr(h, "status");
+        var pythonEl = GetObj(h, "python");
+
+        <!-- Overall status banner -->
+        <div class="vi-panel @(overallStatus == "ok" ? "soft" : "")"
+             style="margin-bottom:12px;border-left:3px solid @(overallStatus == "ok" ? "var(--ok)" : "var(--warn)");">
+            <div class="vi-panel-body vi-row" style="gap:16px;flex-wrap:wrap;align-items:center;">
+                <span class="vi-chip @(overallStatus == "ok" ? "ok" : "warn")" style="font-size:13px;">@overallStatus.ToUpperInvariant()</span>
+                <span class="vi-td-mono vi-faint">Checked: @GetStr(h, "timestamp")</span>
+                @if (pythonEl.HasValue)
+                {
+                    <span class="vi-td-mono vi-faint">Python v@GetStr(pythonEl.Value, "version")</span>
+                }
+                <span class="vi-td-mono vi-faint">DB: <strong class="@(GetBool(h, "db_available") ? "ok" : "err")">@(GetBool(h, "db_available") ? "OK" : "OFFLINE")</strong></span>
+            </div>
+        </div>
+
+        <div class="vi-split" style="flex:1;min-height:0;">
+            <div class="vi-stack" style="min-height:0;overflow-y:auto;">
+
+                <!-- Pipeline services -->
+                @if (pythonEl.HasValue)
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Pipeline Services</span></div>
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead><tr><th>Service</th><th>Status</th></tr></thead>
+                                <tbody>
+                                    @foreach (var svc in PipelineServices(pythonEl.Value, h))
+                                    {
+                                        <tr>
+                                            <td class="vi-td-mono">@svc.Name</td>
+                                            <td><span class="vi-chip @(svc.Up ? "ok" : "err")">@(svc.Up ? "UP" : "DOWN")</span></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+
+                <!-- LLM -->
+                @{
+                    var llmEl  = pythonEl.HasValue ? GetObj(pythonEl.Value, "llm")  : null;
+                    var swarmEl = pythonEl.HasValue ? GetObj(pythonEl.Value, "swarm") : null;
+                }
+                @if (llmEl.HasValue)
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">LLM Provider</span></div>
+                        <div class="vi-panel-body">
+                            <dl class="vi-kv">
+                                <dt>Provider</dt>  <dd class="vi-td-mono">@GetStr(llmEl.Value, "provider")</dd>
+                                <dt>Model</dt>     <dd class="vi-td-mono">@GetStr(llmEl.Value, "model")</dd>
+                                <dt>Available</dt> <dd><span class="vi-chip @(GetBool(llmEl.Value, "available") ? "ok" : "err")">@(GetBool(llmEl.Value, "available") ? "YES" : "NO")</span></dd>
+                            </dl>
+                        </div>
+                    </div>
+                }
+
+                <!-- Swarm -->
+                @if (swarmEl.HasValue)
+                {
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Agent Swarm</span></div>
+                        <div class="vi-panel-body">
+                            <dl class="vi-kv">
+                                <dt>Agents</dt>          <dd class="vi-td-mono accent">@GetInt(swarmEl.Value, "agents")</dd>
+                                <dt>Total Missions</dt>  <dd class="vi-td-mono">@GetInt(swarmEl.Value, "total_missions")</dd>
+                                <dt>Active Missions</dt> <dd class="vi-td-mono ok">@GetInt(swarmEl.Value, "active_missions")</dd>
+                            </dl>
+                        </div>
+                        @if (swarmEl.Value.TryGetProperty("agent_statuses", out var statuses) && statuses.ValueKind == JsonValueKind.Object)
+                        {
+                            <div class="vi-tbl-wrap">
+                                <table class="vi-table">
+                                    <thead><tr><th>Agent</th><th>Status</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var prop in statuses.EnumerateObject())
+                                        {
+                                            var st = prop.Value.GetString() ?? "--";
+                                            <tr>
+                                                <td class="vi-td-mono">@prop.Name</td>
+                                                <td><span class="vi-chip @AgentStatusCls(st)">@st.ToUpperInvariant()</span></td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    </div>
+                }
+
+            </div>
+
+            <div class="vi-stack" style="min-height:0;overflow-y:auto;">
+
+                <!-- Scheduler -->
+                @if (pythonEl.HasValue)
+                {
+                    var schedEl = GetObj(pythonEl.Value, "scheduler");
+                    @if (schedEl.HasValue)
+                    {
+                        <div class="vi-panel">
+                            <div class="vi-panel-hdr">
+                                <span class="vi-panel-title">Scheduler</span>
+                                <span class="vi-chip @(GetBool(schedEl.Value, "running") ? "ok" : "err")">
+                                    @(GetBool(schedEl.Value, "running") ? "RUNNING" : "STOPPED")
+                                </span>
+                            </div>
+                            @if (!GetBool(schedEl.Value, "running"))
+                            {
+                                <div class="vi-panel-body vi-faint" style="font-size:12px;">@GetStr(schedEl.Value, "reason")</div>
+                            }
+                            else
+                            {
+                                var jobs = GetArr(schedEl.Value, "jobs");
+                                @if (jobs.Count > 0)
+                                {
+                                    <div class="vi-tbl-wrap">
+                                        <table class="vi-table">
+                                            <thead><tr><th>Job</th><th>ID</th><th>Next Run</th></tr></thead>
+                                            <tbody>
+                                                @foreach (var j in jobs)
+                                                {
+                                                    <tr>
+                                                        <td class="vi-td-title">@GetStr(j, "name")</td>
+                                                        <td class="vi-td-mono vi-faint">@GetStr(j, "id")</td>
+                                                        <td class="vi-td-mono">@Fmt(GetStr(j, "next_run"))</td>
+                                                    </tr>
+                                                }
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                }
+                            }
+                        </div>
+                    }
+                }
+
+                <!-- Source health summary -->
+                @if (pythonEl.HasValue && pythonEl.Value.TryGetProperty("sources", out var srcEl) && srcEl.ValueKind == JsonValueKind.Object)
+                {
+                    <div class="vi-panel soft">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">Source Freshness</span></div>
+                        <div class="vi-tbl-wrap">
+                            <table class="vi-table">
+                                <thead><tr><th>Source</th><th>Status</th><th>Circuit</th><th>Detail</th></tr></thead>
+                                <tbody>
+                                    @foreach (var prop in srcEl.EnumerateObject())
+                                    {
+                                        var src = prop.Value;
+                                        var status = src.ValueKind == JsonValueKind.Object ? GetStr(src, "status") : prop.Value.ToString();
+                                        var circuit = src.ValueKind == JsonValueKind.Object ? GetStr(src, "circuit_state", "circuit") : "--";
+                                        var detail  = src.ValueKind == JsonValueKind.Object ? GetStr(src, "error", "detail", "note") : "--";
+                                        <tr>
+                                            <td class="vi-td-mono">@prop.Name</td>
+                                            <td><span class="vi-chip @SrcStatusCls(status)">@status.ToUpperInvariant()</span></td>
+                                            <td class="vi-td-mono vi-faint">@circuit</td>
+                                            <td class="vi-td-note vi-trunc vi-faint" style="max-width:200px;">@detail</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+
+                <!-- Memory jobs -->
+                @if (pythonEl.HasValue)
+                {
+                    var memJobs = GetInt(pythonEl.Value, "memory_jobs");
+                    <div class="vi-panel">
+                        <div class="vi-panel-hdr"><span class="vi-panel-title">In-Memory Jobs</span></div>
+                        <div class="vi-panel-body">
+                            <div class="vi-metric" style="display:inline-flex;flex-direction:column;gap:4px;">
+                                <div class="vi-metric-label">Queued/Running</div>
+                                <div class="vi-metric-val accent">@memJobs</div>
+                            </div>
+                        </div>
+                    </div>
+                }
+
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    bool _loading;
+    JsonElement? _health;
+    string _loadedAt = "";
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _health    = await Api.GetAsync<JsonElement?>("api/admin/health");
+            _loadedAt  = DateTime.UtcNow.ToString("HH:mm:ss'Z'");
+        }
+        catch (Exception ex) { Toast.ShowError($"Runtime: {ex.Message}"); }
+        finally { _loading = false; }
+    }
+
+    record SvcRow(string Name, bool Up);
+
+    static IEnumerable<SvcRow> PipelineServices(JsonElement python, JsonElement dotnet)
+    {
+        yield return new("PostgreSQL",   GetBool(dotnet, "db_available") || GetBool(python, "db_available"));
+        yield return new("Neo4j",        GetBool(python, "neo4j_available"));
+        yield return new("Redis (Event Bus)", python.TryGetProperty("sources", out _) || GetBool(python, "db_available")); // infer from memory_jobs > 0
+        yield return new("Scheduler",    python.TryGetProperty("scheduler", out var s) && s.ValueKind == JsonValueKind.Object && GetBool(s, "running"));
+        yield return new("Agent Swarm",  python.TryGetProperty("swarm", out var sw) && sw.ValueKind == JsonValueKind.Object && GetInt(sw, "agents") > 0);
+        yield return new("LLM Provider", python.TryGetProperty("llm", out var l)  && l.ValueKind == JsonValueKind.Object && GetBool(l, "available"));
+    }
+
+    static bool GetBool(JsonElement el, string key)
+    {
+        if (el.TryGetProperty(key, out var v))
+            return v.ValueKind == JsonValueKind.True || (v.ValueKind == JsonValueKind.String && v.GetString() is "true" or "ok");
+        return false;
+    }
+
+    static JsonElement? GetObj(JsonElement el, string key)
+    {
+        if (el.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.Object)
+            return v;
+        return null;
+    }
+
+    static string GetStr(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v))
+                return v.ValueKind == JsonValueKind.String ? v.GetString() ?? "--" : v.ToString();
+        return "--";
+    }
+
+    static int GetInt(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i))
+                return i;
+        return 0;
+    }
+
+    static List<JsonElement> GetArr(JsonElement el, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Array)
+                return v.EnumerateArray().ToList();
+        return new();
+    }
+
+    static string Fmt(string? ts)
+    {
+        if (string.IsNullOrWhiteSpace(ts) || ts == "--") return "--";
+        return ts.Length >= 16 ? ts[..16].Replace("T", " ") : ts;
+    }
+
+    static string AgentStatusCls(string s) => s.ToLowerInvariant() switch
+    {
+        "idle"    => "ok",
+        "running" => "accent",
+        "error"   => "err",
+        _         => ""
+    };
+
+    static string SrcStatusCls(string s) => s.ToLowerInvariant() switch
+    {
+        "ok"       => "ok",
+        "degraded" => "warn",
+        "error"    => "err",
+        _          => ""
+    };
+}

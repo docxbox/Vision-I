@@ -1,0 +1,13 @@
+<section class="vi-panel soft" style="padding:0;overflow:hidden;">
+    <div class="vi-panel-hdr">
+        <span class="vi-panel-title">@Title</span>
+    </div>
+    <div class="vi-panel-body">
+        @ChildContent
+    </div>
+</section>
+
+@code {
+    [Parameter] public string Title { get; set; } = "";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

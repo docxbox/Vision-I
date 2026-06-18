@@ -1,0 +1,126 @@
+@inject IConfiguration Configuration
+@using System.Globalization
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Vision-I - Global intelligence platform for real-time geopolitical event monitoring, entity tracking, and sentiment analysis across live data sources." />
+    <meta name="theme-color" content="#09090b" />
+    <title>Vision-I | Global Intelligence Platform</title>
+    <base href="/" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=Geist+Mono:wght@100..900&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <link rel="stylesheet" href="app.css?v=20260522-popup-theme" />
+    <link rel="stylesheet" href="_content/MudBlazor/MudBlazor.min.css" />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <link href="vendor/maplibre/maplibre-gl.css" rel="stylesheet" />
+    <script src="js/theme-interop.js"></script>
+    <HeadOutlet />
+</head>
+
+<body>
+    <Routes @rendermode="@(new InteractiveServerRenderMode(prerender: false))" />
+    <script src="vendor/maplibre/maplibre-gl.js"></script>
+    <script>
+        window.VisionIMapConfig = {
+            styleUrl: "@MapStyleUrl",
+            initialCenter: [@MapInitialLongitude, @MapInitialLatitude],
+            initialZoom: @MapInitialZoom
+        };
+    </script>
+    <script src="js/map-interop.js?v=20260615-viewport-assets"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="js/chart-interop.js"></script>
+    <script src="js/auth-interop.js"></script>
+    <script src="vendor/cytoscape.min.js"></script>
+    <script src="js/graph-interop.js?v=20260430-cytoscape"></script>
+    <script src="js/particle-interop.js"></script>
+    <script src="js/feed-interop.js?v=20260419-saas"></script>
+    <script src="js/oracle-interop.js"></script>
+    <script src="js/vision-interop.js"></script>
+    <script>
+        window.viReports = {
+            printHtml: function(html) {
+                var w = window.open('', '_blank');
+                if (!w) return;
+                w.document.open();
+                w.document.write(html || '');
+                w.document.close();
+                w.focus();
+                setTimeout(function() { try { w.print(); } catch (_) {} }, 250);
+            },
+            downloadWord: function(filename, html) {
+                var blob = new Blob(['\ufeff', html || ''], { type: 'application/msword;charset=utf-8' });
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = filename || 'vision-i-report.doc';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+            }
+        };
+
+        // Global keyboard shortcuts
+        window.__viPaletteRef = null;
+        window.__viHomeRef    = null;
+
+        window.__viRegisterPaletteShortcut = function(dotNetRef) {
+            window.__viPaletteRef = dotNetRef;
+        };
+        window.__viRegisterHomeRef = function(dotNetRef) {
+            window.__viHomeRef = dotNetRef;
+        };
+
+        // Layer key map: 1-8
+        var _viLayerKeys = {
+            '1': 'flights', '2': 'vessels', '3': 'events', '4': 'heat',
+            '5': 'narrative', '6': 'jamming', '7': 'airspace', '8': 'satellite',
+            '9': 'escalation'
+        };
+
+        document.addEventListener('keydown', function(e) {
+            // Ctrl+K -> command palette
+            if ((e.ctrlKey||e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                if (window.__viPaletteRef) {
+                    window.__viPaletteRef.invokeMethodAsync('OpenPalette');
+                }
+                return;
+            }
+            // Ctrl+J -> focus JARVIS input
+            if ((e.ctrlKey||e.metaKey) && e.key === 'j') {
+                e.preventDefault();
+                if (window.__viHomeRef) {
+                    window.__viHomeRef.invokeMethodAsync('FocusJarvisInput');
+                }
+                return;
+            }
+            // Keys 1-8 -> toggle map layers (not when typing in an input)
+            var tag = document.activeElement ? document.activeElement.tagName : '';
+            if (!e.ctrlKey && !e.altKey && !e.metaKey && tag !== 'INPUT' && tag !== 'TEXTAREA') {
+                var layer = _viLayerKeys[e.key];
+                if (layer && window.viMap) {
+                    viMap.toggleLayer(layer);
+                }
+            }
+        });
+    </script>
+    <script src="_content/MudBlazor/MudBlazor.min.js"></script>
+    <script src="_framework/blazor.web.js"></script>
+</body>
+
+</html>
+
+@code {
+    private string MapStyleUrl => Configuration["Map:StyleUrl"] ?? "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+    private string MapInitialLongitude => (Configuration.GetValue<double?>("Map:InitialCenter:Longitude") ?? 10d).ToString(CultureInfo.InvariantCulture);
+    private string MapInitialLatitude => (Configuration.GetValue<double?>("Map:InitialCenter:Latitude") ?? 25d).ToString(CultureInfo.InvariantCulture);
+    private string MapInitialZoom => (Configuration.GetValue<double?>("Map:InitialZoom") ?? 2d).ToString(CultureInfo.InvariantCulture);
+}
+

@@ -1,0 +1,522 @@
+@page "/investigations"
+@page "/events"
+@layout AnalystLayout
+@inject ApiService Api
+@inject NavigationManager Nav
+@inject ToastService Toast
+@using System.Text.Json
+
+<PageTitle>Investigations | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Mission / Investigations</div>
+            <h1 class="vi-h1">Investigations</h1>
+            <div class="vi-sub">LIVE EVENT FEED · SEARCH · FILTER · TRIAGE</div>
+        </div>
+        <div class="vi-page-actions">
+            <span class="vi-chip info">@_total.ToString("N0") events</span>
+            <button class="vi-btn" disabled="@_loading" @onclick="RefreshAsync">
+                <span class="material-symbols-outlined" style="font-size:15px;">refresh</span>
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <div class="vi-panel" style="padding:12px;position:sticky;top:0;z-index:2;background:rgba(18,18,21,.96);backdrop-filter:blur(12px);">
+        <div style="display:grid;grid-template-columns:minmax(220px,1fr) 150px 130px 130px;gap:8px;align-items:center;">
+            <input class="vi-input" placeholder="Search events, entities, assets, locations..."
+                   @bind="_q" @bind:event="oninput" @onkeyup="SearchKey" />
+            <select class="vi-select" value="@_source" @onchange="OnSourceChangedAsync">
+                <option value="">All sources</option>
+                @foreach (var src in _sources)
+                {
+                    <option value="@src">@src.ToUpperInvariant()</option>
+                }
+            </select>
+            <select class="vi-select" value="@_risk" @onchange="OnRiskChangedAsync">
+                <option value="">All risk</option>
+                <option value="high">High</option>
+                <option value="medium">Medium+</option>
+                <option value="low">Low</option>
+            </select>
+            <button class="vi-btn primary" disabled="@_loading" @onclick="ApplyFiltersAsync">Apply</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap;">
+            <button class="vi-chip @(_sort == "latest" ? "info" : "")" @onclick='() => SetSortAsync("latest")'>Latest</button>
+            <button class="vi-chip @(_sort == "risk" ? "warn" : "")" @onclick='() => SetSortAsync("risk")'>Highest risk</button>
+            <button class="vi-chip @(_withGeo ? "ok" : "")" @onclick="ToggleGeoAsync">Geo only</button>
+            @if (!string.IsNullOrWhiteSpace(_source))
+            {
+                <button class="vi-chip err" @onclick="ClearSourceAsync">Source: @_source.ToUpperInvariant() ×</button>
+            }
+            @if (!string.IsNullOrWhiteSpace(_q))
+            {
+                <button class="vi-chip err" @onclick="ClearSearchAsync">Clear search</button>
+            }
+            <span style="margin-left:auto;font:600 10px/1 var(--mono);color:var(--tf);letter-spacing:.08em;">
+                @(_items.Count.ToString("N0")) shown · @_sourceFacets.Count source families indexed
+            </span>
+        </div>
+        @if (_sourceFacets.Count > 0)
+        {
+            <div style="display:flex;gap:6px;align-items:center;margin-top:10px;overflow-x:auto;padding-bottom:2px;">
+                <button class="vi-chip @SourceChipClass("")" style="white-space:nowrap;" @onclick="ClearSourceAsync">ALL SOURCES</button>
+                @foreach (var source in _sourceFacets.Take(24))
+                {
+                    <button class="vi-chip @SourceChipClass(source.Source)" style="white-space:nowrap;"
+                            title="@($"{source.Source} · {source.Family} · {source.Count:N0} matching events")"
+                            @onclick="() => FilterSourceAsync(source.Source)">
+                        @source.Source.ToUpperInvariant()
+                        <span style="opacity:.65;">@source.Count</span>
+                    </button>
+                }
+            </div>
+        }
+    </div>
+
+    @if (_loading && _items.Count == 0)
+    {
+        <div class="vi-loading">LOADING INVESTIGATION FEED</div>
+    }
+    else if (!string.IsNullOrWhiteSpace(_error))
+    {
+        <div class="vi-err">@_error</div>
+    }
+    else if (_items.Count == 0)
+    {
+        <div class="vi-empty">
+            <span class="material-symbols-outlined">search_off</span>
+            No matching events. Try clearing filters.
+        </div>
+    }
+    else
+    {
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px;align-items:start;">
+            <div class="vi-stack" style="gap:10px;">
+                @foreach (var item in _items)
+                {
+                    <article class="vi-panel" style="padding:0;overflow:hidden;">
+                        <button style="display:block;width:100%;text-align:left;background:none;border:0;color:inherit;padding:14px 16px;cursor:pointer;"
+                                @onclick="() => OpenEvent(item.EventId)">
+                            <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;">
+                                <span class="vi-chip @RiskClass(item.RiskScore)" style="flex-shrink:0;">@RiskLabel(item.RiskScore)</span>
+                                <div style="min-width:0;flex:1;">
+                                    <div style="font:700 15px/1.35 var(--font);color:var(--t);" class="vi-trunc">@item.Title</div>
+                                    <div style="display:flex;gap:8px;align-items:center;margin-top:3px;flex-wrap:wrap;">
+                                        <span class="vi-td-mono vi-faint" style="font-size:10px;">@(item.Source?.ToUpperInvariant() ?? "UNKNOWN")</span>
+                                        @if (!string.IsNullOrWhiteSpace(item.EventType))
+                                        {
+                                            <span class="vi-chip" style="font-size:9px;">@item.EventType</span>
+                                        }
+                                        <span class="vi-faint" style="font-size:11px;">@FmtAge(item.Timestamp)</span>
+                                    </div>
+                                </div>
+                                <span class="material-symbols-outlined" style="font-size:16px;color:var(--tf);">arrow_forward</span>
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(item.Description))
+                            {
+                                <p style="margin:0 0 10px;color:var(--t2);font-size:12px;line-height:1.55;">
+                                    @(item.Description.Length > 260 ? item.Description[..260] + "..." : item.Description)
+                                </p>
+                            }
+                            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                                @if (!string.IsNullOrWhiteSpace(item.LocationName))
+                                {
+                                    <span class="vi-chip info" style="font-size:9px;">@item.LocationName</span>
+                                }
+                                @foreach (var tag in item.Tags.Take(5))
+                                {
+                                    <span class="vi-chip" style="font-size:9px;">#@tag</span>
+                                }
+                                @if (item.SignalCount > 0)
+                                {
+                                    <span class="vi-chip warn" style="font-size:9px;margin-left:auto;">@item.SignalCount signals</span>
+                                }
+                            </div>
+                        </button>
+                    </article>
+                }
+
+                <button class="vi-btn lg" disabled="@_loadingMore" @onclick="LoadMoreAsync">
+                    @(_loadingMore ? "Loading..." : "Load more")
+                </button>
+            </div>
+
+            <aside class="vi-stack" style="gap:10px;position:sticky;top:86px;">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Feed Pulse</span></div>
+                    <div class="vi-panel-body vi-stack">
+                        <div class="vi-kv"><span class="vi-kv-key">High risk</span><strong>@_items.Count(x => x.RiskScore >= .7)</strong></div>
+                        <div class="vi-kv"><span class="vi-kv-key">Geo located</span><strong>@_items.Count(x => x.HasGeo)</strong></div>
+                        <div class="vi-kv"><span class="vi-kv-key">Sources</span><strong>@_sourceFacets.Count</strong></div>
+                    </div>
+                </div>
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Top Sources</span></div>
+                    <div class="vi-panel-body vi-stack">
+                        @foreach (var source in _sourceFacets.Take(12))
+                        {
+                            <button class="vi-kv" style="background:none;border:0;padding:0;text-align:left;cursor:pointer;"
+                                    @onclick="() => FilterSourceAsync(source.Source)">
+                                <span>
+                                    <span class="vi-kv-key">@source.Source.ToUpperInvariant()</span>
+                                    <span class="vi-faint" style="display:block;font-size:10px;margin-top:2px;">@source.Family</span>
+                                </span>
+                                <span class="vi-chip">@source.Count</span>
+                            </button>
+                        }
+                    </div>
+                </div>
+            </aside>
+        </div>
+    }
+</div>
+
+@code {
+    bool _loading = true;
+    bool _loadingMore;
+    bool _withGeo;
+    string _q = "";
+    string _source = "";
+    string _risk = "";
+    string _sort = "latest";
+    string _error = "";
+    int _offset;
+    int _total;
+    readonly int _pageSize = 100;
+    readonly List<InvestigationItem> _items = [];
+    readonly List<string> _sources = [];
+    readonly List<SourceFacet> _sourceFacets = [];
+    CancellationTokenSource? _cts;
+
+    protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    async Task RefreshAsync()
+    {
+        _offset = 0;
+        _items.Clear();
+        await LoadAsync(reset: true);
+    }
+
+    async Task ApplyFiltersAsync() => await RefreshAsync();
+
+    async Task OnSourceChangedAsync(ChangeEventArgs e)
+    {
+        _source = e.Value?.ToString() ?? "";
+        await RefreshAsync();
+    }
+
+    async Task OnRiskChangedAsync(ChangeEventArgs e)
+    {
+        _risk = e.Value?.ToString() ?? "";
+        await RefreshAsync();
+    }
+
+    async Task SetSortAsync(string sort)
+    {
+        _sort = sort;
+        await RefreshAsync();
+    }
+
+    async Task ToggleGeoAsync()
+    {
+        _withGeo = !_withGeo;
+        await RefreshAsync();
+    }
+
+    async Task ClearSearchAsync()
+    {
+        _q = "";
+        await RefreshAsync();
+    }
+
+    async Task ClearSourceAsync()
+    {
+        _source = "";
+        await RefreshAsync();
+    }
+
+    async Task FilterSourceAsync(string source)
+    {
+        _source = source;
+        await RefreshAsync();
+    }
+
+    async Task SearchKey(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await RefreshAsync();
+    }
+
+    async Task LoadMoreAsync()
+    {
+        if (_loadingMore) return;
+        _offset += _pageSize;
+        await LoadAsync(reset: false);
+    }
+
+    async Task LoadAsync(bool reset)
+    {
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        if (reset) _loading = true; else _loadingMore = true;
+        _error = "";
+        StateHasChanged();
+
+        try
+        {
+            var path = BuildPath();
+            var raw = await Api.GetAsync<JsonElement?>(path, TimeSpan.FromSeconds(20), _cts.Token);
+            if (raw is not { ValueKind: JsonValueKind.Object } json)
+            {
+                _error = "Event feed unavailable.";
+                return;
+            }
+
+            _total = ReadInt(json, "total");
+            if (json.TryGetProperty("events", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in arr.EnumerateArray())
+                {
+                    var mapped = MapItem(item);
+                    if (!PassesSource(mapped))
+                        continue;
+                    if (_withGeo && !mapped.HasGeo)
+                        continue;
+                    if (!PassesRisk(mapped))
+                        continue;
+                    _items.Add(mapped);
+                }
+            }
+
+            if (reset)
+            {
+                ReadSourceFacets(json);
+                await LoadSourceFacetsAsync(_cts.Token);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toast.ShowError($"Feed failed: {ex.Message}");
+        }
+        finally
+        {
+            _loading = false;
+            _loadingMore = false;
+        }
+    }
+
+    string BuildPath()
+    {
+        var parts = new List<string> { $"limit={_pageSize}", $"offset={_offset}" };
+        if (_sort == "risk") parts.Add("sort_by=risk_score");
+        if (!string.IsNullOrWhiteSpace(_source)) parts.Add($"source={Uri.EscapeDataString(_source)}");
+        if (!string.IsNullOrWhiteSpace(_q)) parts.Add($"query={Uri.EscapeDataString(_q)}");
+        return $"api/events?{string.Join("&", parts)}";
+    }
+
+    async Task LoadSourceFacetsAsync(CancellationToken ct)
+    {
+        try
+        {
+            var parts = new List<string> { "limit=100" };
+            if (!string.IsNullOrWhiteSpace(_q)) parts.Add($"query={Uri.EscapeDataString(_q)}");
+
+            var raw = await Api.GetAsync<JsonElement?>($"api/events/sources?{string.Join("&", parts)}", TimeSpan.FromSeconds(20), ct);
+            if (raw is not { ValueKind: JsonValueKind.Object } json ||
+                !json.TryGetProperty("sources", out var arr) ||
+                arr.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
+
+            var facets = new List<SourceFacet>();
+            foreach (var src in arr.EnumerateArray())
+            {
+                var name = ReadString(src, "source");
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                facets.Add(new SourceFacet(name, SourceFamily(name), ReadInt(src, "count")));
+            }
+
+            if (facets.Count == 0)
+                return;
+
+            _sourceFacets.Clear();
+            _sourceFacets.AddRange(facets.OrderByDescending(x => x.Count));
+
+            _sources.Clear();
+            _sources.AddRange(_sourceFacets
+                .Select(x => x.Source)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(x => x));
+        }
+        catch (OperationCanceledException) { }
+        catch
+        {
+            // Keep the feed browsable even if source-facet hydration is briefly unavailable.
+        }
+    }
+
+    void ReadSourceFacets(JsonElement json)
+    {
+        _sourceFacets.Clear();
+        _sources.Clear();
+
+        if (json.TryGetProperty("sources", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var src in arr.EnumerateArray())
+            {
+                var name = ReadString(src, "source");
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                _sourceFacets.Add(new SourceFacet(name, SourceFamily(name), ReadInt(src, "count")));
+            }
+        }
+
+        if (_sourceFacets.Count == 0)
+        {
+            _sourceFacets.AddRange(_items
+                .Where(i => !string.IsNullOrWhiteSpace(i.Source))
+                .GroupBy(i => i.Source!, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new SourceFacet(g.Key, SourceFamily(g.Key), g.Count()))
+                .OrderByDescending(x => x.Count));
+        }
+
+        _sources.AddRange(_sourceFacets
+            .Select(x => x.Source)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x));
+    }
+
+    bool PassesRisk(InvestigationItem item) => _risk switch
+    {
+        "high" => item.RiskScore >= .7,
+        "medium" => item.RiskScore >= .4,
+        "low" => item.RiskScore < .4,
+        _ => true
+    };
+
+    bool PassesSource(InvestigationItem item)
+    {
+        if (string.IsNullOrWhiteSpace(_source))
+            return true;
+
+        var source = item.Source ?? "";
+        return string.Equals(source, _source, StringComparison.OrdinalIgnoreCase) ||
+               source.StartsWith($"{_source}_", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static InvestigationItem MapItem(JsonElement e)
+    {
+        var locName = "";
+        double? lat = null;
+        double? lon = null;
+        if (e.TryGetProperty("location", out var loc) && loc.ValueKind == JsonValueKind.Object)
+        {
+            locName = ReadString(loc, "name") ?? "";
+            lat = ReadDoubleNullable(loc, "lat");
+            lon = ReadDoubleNullable(loc, "lon");
+        }
+
+        return new InvestigationItem(
+            EventId: ReadString(e, "event_id") ?? "",
+            Title: ReadString(e, "title") ?? "Untitled event",
+            Description: ReadString(e, "description") ?? ReadString(e, "body") ?? "",
+            Source: ReadString(e, "source"),
+            EventType: ReadString(e, "event_type"),
+            Timestamp: ReadString(e, "timestamp"),
+            RiskScore: ReadDoubleNullable(e, "risk_score") ?? 0,
+            SignalCount: ReadInt(e, "signal_count"),
+            LocationName: locName,
+            HasGeo: lat.HasValue && lon.HasValue,
+            Tags: ReadStringList(e, "tags"));
+    }
+
+    void OpenEvent(string id)
+    {
+        if (!string.IsNullOrWhiteSpace(id))
+            Nav.NavigateTo($"/events/{Uri.EscapeDataString(id)}");
+    }
+
+    static string? ReadString(JsonElement e, string name)
+        => e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+
+    static int ReadInt(JsonElement e, string name)
+        => e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var v) ? v : 0;
+
+    static double? ReadDoubleNullable(JsonElement e, string name)
+        => e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.Number && p.TryGetDouble(out var v) ? v : null;
+
+    static List<string> ReadStringList(JsonElement e, string name)
+    {
+        if (!e.TryGetProperty(name, out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return [];
+        return arr.EnumerateArray()
+            .Where(x => x.ValueKind == JsonValueKind.String)
+            .Select(x => x.GetString() ?? "")
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Take(8)
+            .ToList();
+    }
+
+    static string RiskClass(double value) => value switch
+    {
+        >= .7 => "err",
+        >= .4 => "warn",
+        _ => "info"
+    };
+
+    static string RiskLabel(double value) => value switch
+    {
+        >= .7 => $"HIGH {value:0.00}",
+        >= .4 => $"MED {value:0.00}",
+        _ => $"LOW {value:0.00}"
+    };
+
+    string SourceChipClass(string source)
+        => string.Equals(_source, source, StringComparison.OrdinalIgnoreCase) ? "info" : "";
+
+    static string SourceFamily(string source)
+    {
+        var s = source.ToLowerInvariant();
+        if (s.StartsWith("rss")) return "RSS";
+        if (s.StartsWith("gdelt")) return "GDELT";
+        if (s.Contains("newsapi")) return "NewsAPI";
+        if (s is "reddit" or "youtube" or "telegram" or "twitter" or "bluesky") return "Social";
+        if (s is "ais" or "opensky") return "Transport";
+        if (s is "usgs" or "weather" or "firms") return "Geo";
+        if (s.Contains("finance") || s.Contains("treasury")) return "Market";
+        return "Source";
+    }
+
+    static string FmtAge(string? raw)
+    {
+        if (!DateTimeOffset.TryParse(raw, out var dto)) return "--";
+        var d = DateTimeOffset.UtcNow - dto.ToUniversalTime();
+        return d.TotalMinutes < 60 ? $"{Math.Max(0, (int)d.TotalMinutes)}m ago"
+            : d.TotalHours < 24 ? $"{(int)d.TotalHours}h ago"
+            : $"{(int)d.TotalDays}d ago";
+    }
+
+    sealed record InvestigationItem(
+        string EventId,
+        string Title,
+        string Description,
+        string? Source,
+        string? EventType,
+        string? Timestamp,
+        double RiskScore,
+        int SignalCount,
+        string LocationName,
+        bool HasGeo,
+        List<string> Tags);
+
+    sealed record SourceFacet(string Source, string Family, int Count);
+}

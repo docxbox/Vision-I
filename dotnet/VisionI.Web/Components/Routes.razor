@@ -1,0 +1,54 @@
+@using VisionI.Web.Services
+@inject AuthService AuthService
+@inject ViLiveSession LiveSession
+
+@if (!_initialized)
+{
+    <div class="boot-shell">
+        <div class="boot-card">
+            <div class="boot-mark">VI</div>
+            <div class="boot-title">Initializing Vision-I</div>
+            <div class="boot-copy">Restoring operator session and reconnecting the intelligence workspace.</div>
+        </div>
+    </div>
+}
+else
+{
+    <Router AppAssembly="typeof(Program).Assembly">
+        <Found Context="routeData">
+            <RouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)" />
+            <FocusOnNavigate RouteData="routeData" Selector="h1" />
+        </Found>
+        <NotFound>
+            <LayoutView Layout="typeof(Layout.MainLayout)">
+                <div class="vi-page" style="align-items:center;justify-content:center;">
+                    <div style="text-align:center;padding:48px 24px;">
+                        <span class="material-symbols-outlined" style="font-size:48px;color:var(--tf);">search_off</span>
+                        <div style="font:700 14px/1 var(--font);margin:12px 0 6px;color:var(--t);">404 — Page Not Found</div>
+                        <div style="font-size:12px;color:var(--tm);margin-bottom:16px;">This route does not exist in the workspace.</div>
+                        <a class="vi-btn primary" href="/dashboard">Return to Dashboard</a>
+                    </div>
+                </div>
+            </LayoutView>
+        </NotFound>
+    </Router>
+}
+
+@code {
+    private bool _initialized;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender||_initialized)
+        {
+            return;
+        }
+
+        await AuthService.InitializeAsync();
+        if (AuthService.IsAuthenticated)
+            await LiveSession.InitAsync(AuthService.AccessToken);
+        _initialized = true;
+        StateHasChanged();
+    }
+}
+

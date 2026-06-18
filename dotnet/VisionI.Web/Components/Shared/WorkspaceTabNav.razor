@@ -1,0 +1,13 @@
+<div class="vi-tab-grp" style="margin-bottom:16px;">
+    @foreach (var tab in Tabs)
+    {
+        <button class="vi-tab-btn @(ActiveTab == tab ? "active" : "")"
+                @onclick="() => OnTabChange.InvokeAsync(tab)">@tab</button>
+    }
+</div>
+
+@code {
+    [Parameter] public string[]            Tabs        { get; set; } = [];
+    [Parameter] public string              ActiveTab   { get; set; } = "";
+    [Parameter] public EventCallback<string> OnTabChange { get; set; }
+}

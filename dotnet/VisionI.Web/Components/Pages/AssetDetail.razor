@@ -1,0 +1,450 @@
+@page "/assets/{AssetId}"
+@layout AnalystLayout
+@inject ApiService Api
+@inject ToastService Toast
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Asset Detail | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">
+                @if (!string.IsNullOrWhiteSpace(FromWorkspace))
+                {
+                    <a href="/workspaces/@Uri.EscapeDataString(FromWorkspace)" class="vi-faint" style="text-decoration:none;">Workspace: @FromWorkspace</a>
+                    <span> / </span>
+                }
+                else
+                {
+                    <a href="/assets" class="vi-faint" style="text-decoration:none;">Assets</a>
+                    <span> / </span>
+                }
+                @(AssetId)
+            </div>
+            <h1 class="vi-h1">@DisplayName</h1>
+            <div class="vi-sub">@((_asset?.AssetType ?? "asset").ToUpperInvariant()) · @(_asset?.OriginCountry ?? "--")</div>
+        </div>
+        <div class="vi-page-actions">
+            <a class="vi-btn" href="@(string.IsNullOrWhiteSpace(FromWorkspace) ? "/assets" : $"/workspaces/{Uri.EscapeDataString(FromWorkspace)}")">
+                @(string.IsNullOrWhiteSpace(FromWorkspace) ? "Back" : "Back to Workspace")
+            </a>
+            <button class="vi-btn" disabled="@_loading" @onclick="LoadAsync">Refresh</button>
+        </div>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="vi-loading">LOADING ASSET</div>
+    }
+    else if (_asset is null)
+    {
+        <div class="vi-empty">
+            <span class="material-symbols-outlined">search_off</span>
+            Asset not found or unavailable
+        </div>
+    }
+    else
+    {
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;align-items:start;">
+            <div class="vi-stack" style="min-width:0;">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Asset Summary</span>
+                        <span class="vi-chip @TypeCls(_asset.AssetType)">@((_asset.AssetType ?? "asset").ToUpperInvariant())</span>
+                    </div>
+                    <div class="vi-panel-body">
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;">
+                            @SummaryTile("Asset ID", _asset.AssetId)
+                            @SummaryTile("Name", _asset.Name)
+                            @SummaryTile("Callsign", _asset.Callsign)
+                            @SummaryTile("Identifier", _asset.Identifier)
+                            @SummaryTile("Origin", _asset.OriginCountry)
+                            @SummaryTile("Last seen", FmtTime(_asset.LastSeen))
+                        </div>
+                    </div>
+                </div>
+
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">Position</span>
+                        @if (_asset.LastLat.HasValue && _asset.LastLon.HasValue)
+                        {
+                            <a class="vi-btn sm" href="@MapHref()">View on Map</a>
+                        }
+                    </div>
+                    <div class="vi-panel-body">
+                        <div style="display:grid;grid-template-columns:minmax(300px,420px) minmax(0,1fr);gap:14px;align-items:stretch;">
+                            <div id="@_miniMapId" style="height:228px;border:1px solid var(--bd);border-radius:16px;overflow:hidden;background:var(--bg);"></div>
+                            <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-content:start;">
+                                @SummaryTile("Latitude", _asset.LastLat?.ToString("F5"))
+                                @SummaryTile("Longitude", _asset.LastLon?.ToString("F5"))
+                                @SummaryTile("Speed", _asset.LastSpeed.HasValue ? $"{_asset.LastSpeed.Value:0} kt" : null)
+                                @SummaryTile("Heading", _asset.LastHeading.HasValue ? $"{_asset.LastHeading.Value:0} deg" : null)
+                                @SummaryTile("Altitude", _asset.LastAltitude.HasValue ? $"{_asset.LastAltitude.Value:0} m" : null)
+                                @SummaryTile("On ground", _asset.OnGround.HasValue ? (_asset.OnGround.Value ? "YES" : "NO") : null)
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                @if (_asset.Profile is { } profile)
+                {
+                    <div class="vi-panel" style="border-left:3px solid @ProfileAccent;">
+                        <div class="vi-panel-hdr">
+                            <span class="vi-panel-title">@ProfilePanelTitle</span>
+                            <span class="vi-chip info">@(profile.Source ?? "Telemetry")</span>
+                        </div>
+                        <div class="vi-panel-body vi-stack" style="gap:14px;">
+                            <div style="display:grid;grid-template-columns:132px minmax(0,1fr);gap:14px;align-items:stretch;">
+                                <div style="min-height:132px;border:1px solid var(--bd);border-radius:16px;background:linear-gradient(145deg,rgba(34,211,238,.10),rgba(139,92,246,.08)),var(--bg2);display:flex;align-items:center;justify-content:center;overflow:hidden;">
+                                    @if (!string.IsNullOrWhiteSpace(profile.ImageUrl))
+                                    {
+                                        <img src="@profile.ImageUrl" alt="@profile.Title" style="width:100%;height:100%;object-fit:cover;" />
+                                    }
+                                    else
+                                    {
+                                        <div style="text-align:center;">
+                                            <div class="material-symbols-outlined" style="font-size:34px;color:@VisualColor(profile.VisualKind);">@(AssetIcon(profile.VisualKind ?? _asset.AssetType))</div>
+                                            <div class="vi-td-mono" style="font-size:20px;font-weight:800;color:var(--t);margin-top:8px;">@(profile.VisualLabel ?? VisualLabel(profile.Title ?? DisplayName))</div>
+                                            <div class="vi-faint" style="font-size:10px;text-transform:uppercase;letter-spacing:.12em;">identity</div>
+                                        </div>
+                                    }
+                                </div>
+                                <div style="min-width:0;">
+                                    <div style="font-size:18px;font-weight:800;color:var(--t);overflow-wrap:anywhere;">@(profile.Title ?? DisplayName)</div>
+                                    @if (!string.IsNullOrWhiteSpace(profile.Description))
+                                    {
+                                        <div class="vi-faint" style="font-size:11px;margin-top:3px;">@profile.Description</div>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(profile.Extract))
+                                    {
+                                        <div style="font-size:13px;color:var(--t2);line-height:1.65;margin-top:10px;overflow-wrap:anywhere;">@profile.Extract</div>
+                                    }
+                                    @if (profile.ExternalLinks.Any(l => !string.IsNullOrWhiteSpace(l.Url)))
+                                    {
+                                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+                                            @foreach (var link in profile.ExternalLinks.Where(l => !string.IsNullOrWhiteSpace(l.Url)))
+                                            {
+                                                <a class="vi-btn sm" href="@link.Url" target="_blank" rel="noopener noreferrer">
+                                                    @(link.Label ?? "Lookup") <span class="material-symbols-outlined" style="font-size:14px;vertical-align:-2px;">open_in_new</span>
+                                                </a>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+
+                            @if (profile.Facts.Any())
+                            {
+                                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">
+                                    @foreach (var fact in profile.Facts)
+                                    {
+                                        @SummaryTile(fact.Label, FormatFactValue(fact))
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <aside class="vi-stack" style="min-width:0;">
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title">@SnapshotTitle</span>
+                        <span class="vi-chip vi-faint">@(_snapshot?.SnapshotAt?[..16] ?? "--")</span>
+                    </div>
+                    @if (_snapshotLoading)
+                    {
+                        <div class="vi-loading" style="padding:24px;">LOADING SNAPSHOT</div>
+                    }
+                    else if (_snapshot is null || _snapshot.Assets.Count == 0)
+                    {
+                        <div class="vi-empty">No snapshot available</div>
+                    }
+                    else
+                    {
+                        <div class="vi-panel-body vi-stack" style="gap:9px;">
+                            <div style="display:flex;justify-content:space-between;gap:8px;color:var(--tm);font:600 11px/1 var(--mono);">
+                                <span>@((_snapshot.AssetType ?? _asset.AssetType ?? "asset").ToUpperInvariant())</span>
+                                <span>@_snapshot.Total total</span>
+                            </div>
+                            <div style="display:grid;gap:8px;max-height:470px;overflow:auto;padding-right:2px;">
+                                @foreach (var a in SnapshotAssets.Take(28))
+                                {
+                                    var selected = string.Equals(a.AssetId, _asset.AssetId, StringComparison.OrdinalIgnoreCase);
+                                    <a href="@AssetHref(a)"
+                                       style="@SnapshotCardStyle(selected)">
+                                        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;">
+                                            <div style="min-width:0;">
+                                                <div class="vi-td-title vi-trunc" style="font-size:12px;">@(a.Name ?? a.Callsign ?? a.Identifier ?? "Asset")</div>
+                                                <div class="vi-td-mono vi-faint vi-trunc" style="font-size:10px;margin-top:2px;">@(a.Identifier ?? a.AssetId ?? "--")</div>
+                                            </div>
+                                            <span class="vi-chip @TypeCls(a.AssetType)" style="font-size:9px;">@(a.AssetType ?? "asset")</span>
+                                        </div>
+                                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:8px;font:600 10px/1.35 var(--mono);color:var(--tf);">
+                                            <span>LAT <b style="color:var(--t);">@((a.LastLat?.ToString("0.00")) ?? "--")</b></span>
+                                            <span>LON <b style="color:var(--t);">@((a.LastLon?.ToString("0.00")) ?? "--")</b></span>
+                                            <span>SPD <b style="color:var(--t);">@(a.LastSpeed.HasValue ? $"{a.LastSpeed.Value:0} kt" : "--")</b></span>
+                                            <span>SEEN <b style="color:var(--t);">@FmtTime(a.LastSeen)</b></span>
+                                        </div>
+                                    </a>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+
+                <div class="vi-panel">
+                    <div class="vi-panel-hdr"><span class="vi-panel-title">Snapshot Replay</span></div>
+                    <div class="vi-panel-body vi-stack">
+                        <div class="vi-field">
+                            <label class="vi-label">Point-in-time (UTC)</label>
+                            <input class="vi-input" type="datetime-local" @bind="_replayAt" />
+                        </div>
+                        <button class="vi-btn sm" style="align-self:flex-start;"
+                                disabled="@(_replayAt is null || _replayLoading)"
+                                @onclick="LoadReplayAsync">
+                            @(_replayLoading ? "Loading..." : "Load Snapshot")
+                        </button>
+                        @if (_replaySnapshot is not null)
+                        {
+                            <div style="font-size:11px;color:var(--tm);">
+                                Snapshot at @_replaySnapshot.SnapshotAt?[..16] - @_replaySnapshot.Total assets
+                            </div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(_replayError))
+                        {
+                            <div style="font-size:11px;color:var(--err);">@_replayError</div>
+                        }
+                    </div>
+                </div>
+            </aside>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string AssetId { get; set; } = "";
+    [SupplyParameterFromQuery(Name = "from")] public string? FromWorkspace { get; set; }
+
+    readonly string _miniMapId = $"asset-mini-map-{Guid.NewGuid():N}";
+    bool _loading;
+    bool _snapshotLoading;
+    bool _replayLoading;
+    bool _miniMapReady;
+    AssetDto? _asset;
+    AssetSnapshotDto? _snapshot;
+    AssetSnapshotDto? _replaySnapshot;
+    DateTime? _replayAt;
+    string? _replayError;
+
+    string DisplayName => _asset?.Callsign ?? _asset?.Name ?? AssetId;
+
+    IEnumerable<AssetDto> SnapshotAssets =>
+        (_snapshot?.Assets ?? new())
+            .OrderByDescending(a => string.Equals(a.AssetId, _asset?.AssetId, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(a => DistanceToSelected(a));
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            _miniMapReady = true;
+        await RenderMiniMapAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _snapshotLoading = true;
+        try
+        {
+            _asset = await Api.GetAssetAsync(AssetId);
+        }
+        catch (Exception ex) { Toast.ShowError($"Asset load failed: {ex.Message}"); }
+        finally { _loading = false; }
+
+        try
+        {
+            _snapshot = await Api.GetLatestAssetSnapshotAsync(_asset?.AssetType, 500);
+        }
+        catch { /* snapshot not critical */ }
+        finally { _snapshotLoading = false; }
+
+        await RenderMiniMapAsync();
+    }
+
+    async Task RenderMiniMapAsync()
+    {
+        if (!_miniMapReady || _asset?.LastLat is not double lat || _asset.LastLon is not double lon)
+            return;
+
+        try
+        {
+            await JS.InvokeVoidAsync("viAssetMiniMap.render", _miniMapId, new
+            {
+                assetId = _asset.AssetId,
+                assetType = _asset.AssetType,
+                label = DisplayName,
+                lat,
+                lon,
+                heading = _asset.LastHeading ?? 0,
+                speed = _asset.LastSpeed ?? 0,
+                altitude = _asset.LastAltitude ?? 0
+            });
+        }
+        catch (JSDisconnectedException) { }
+        catch (InvalidOperationException) { }
+    }
+
+    async Task LoadReplayAsync()
+    {
+        if (_replayAt is null) return;
+        _replayLoading = true;
+        _replayError = null;
+        _replaySnapshot = null;
+        try
+        {
+            var iso = _replayAt.Value.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ");
+            _replaySnapshot = await Api.GetAssetSnapshotAsync(iso, _asset?.AssetType);
+            if (_replaySnapshot is null)
+                _replayError = "Snapshot not found for this timestamp (Redis cache may not have it).";
+        }
+        catch (Exception ex) { _replayError = ex.Message; }
+        finally { _replayLoading = false; }
+    }
+
+    RenderFragment SummaryTile(string? label, string? value) => @<div style="border:1px solid var(--bd);border-radius:12px;padding:9px 10px;background:rgba(255,255,255,.025);min-width:0;overflow:hidden;">
+        <div class="vi-faint" style="font-size:10px;text-transform:uppercase;letter-spacing:.12em;">@(label ?? "--")</div>
+        <div class="vi-td-mono" style="font-size:12px;color:var(--t);margin-top:4px;white-space:normal;overflow-wrap:anywhere;line-height:1.35;">@(string.IsNullOrWhiteSpace(value) ? "--" : value)</div>
+    </div>;
+
+    static string FmtTime(string? raw)
+    {
+        if (!DateTime.TryParse(raw, out var dt)) return "--";
+        var diff = DateTime.UtcNow - dt.ToUniversalTime();
+        return diff.TotalMinutes < 1 ? "just now"
+             : diff.TotalHours   < 1 ? $"{(int)diff.TotalMinutes}m ago"
+             : diff.TotalDays    < 1 ? $"{(int)diff.TotalHours}h ago"
+             :                         $"{(int)diff.TotalDays}d ago";
+    }
+
+    string MapHref()
+    {
+        if (_asset?.LastLat is double lat && _asset.LastLon is double lon)
+        {
+            return "/map"
+                + $"?asset={Uri.EscapeDataString(_asset.AssetId ?? AssetId)}"
+                + $"&lat={lat.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+                + $"&lon={lon.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+                + $"&type={Uri.EscapeDataString(_asset.AssetType ?? "asset")}"
+                + $"&label={Uri.EscapeDataString(DisplayName)}";
+        }
+
+        return string.IsNullOrWhiteSpace(_asset?.OriginCountry)
+            ? "/map"
+            : "/map?region=" + Uri.EscapeDataString(_asset.OriginCountry);
+    }
+
+    string AssetHref(AssetDto asset)
+    {
+        var href = "/assets/" + Uri.EscapeDataString(asset.AssetId ?? "");
+        if (!string.IsNullOrWhiteSpace(FromWorkspace))
+            href += "?from=" + Uri.EscapeDataString(FromWorkspace);
+        return href;
+    }
+
+    static string SnapshotCardStyle(bool selected)
+    {
+        var border = selected ? "rgba(167,139,250,.75)" : "var(--bd)";
+        var background = selected ? "rgba(139,92,246,.12)" : "rgba(255,255,255,.025)";
+        return $"text-decoration:none;color:inherit;border:1px solid {border};background:{background};border-radius:13px;padding:10px;display:block;min-width:0;";
+    }
+
+    double DistanceToSelected(AssetDto a)
+    {
+        if (_asset?.LastLat is not double lat || _asset.LastLon is not double lon || a.LastLat is not double aLat || a.LastLon is not double aLon)
+            return double.MaxValue;
+        var dLat = aLat - lat;
+        var dLon = aLon - lon;
+        return (dLat * dLat) + (dLon * dLon);
+    }
+
+    static string TypeCls(string? t) => t?.ToLowerInvariant() switch
+    {
+        "aircraft" => "info",
+        "vessel"   => "ok",
+        "facility" => "warn",
+        _          => ""
+    };
+
+    string SnapshotTitle => (_asset?.AssetType ?? "").ToLowerInvariant() switch
+    {
+        "aircraft" => "Flight Snapshot",
+        "vessel" => "Fleet Snapshot",
+        _ => "Asset Snapshot"
+    };
+
+    string ProfilePanelTitle => (_asset?.AssetType ?? "").ToLowerInvariant() switch
+    {
+        "aircraft" => "Flight Dossier",
+        "vessel" => "VesselFinder Dossier",
+        _ => "Open-Source Dossier"
+    };
+
+    string ProfileAccent => (_asset?.AssetType ?? "").ToLowerInvariant() switch
+    {
+        "aircraft" => "var(--warn)",
+        "vessel" => "var(--ok)",
+        "facility" => "var(--accent)",
+        _ => "var(--p2)"
+    };
+
+    static string AssetIcon(string? t) => t?.ToLowerInvariant() switch
+    {
+        "aircraft" => "flight",
+        "vessel" => "directions_boat",
+        "facility" => "warehouse",
+        _ => "radar"
+    };
+
+    static string VisualColor(string? t) => t?.ToLowerInvariant() switch
+    {
+        "aircraft" => "var(--warn)",
+        "vessel" => "var(--ok)",
+        "facility" => "var(--accent)",
+        _ => "var(--t2)"
+    };
+
+    static string VisualLabel(string value)
+    {
+        var parts = value.Split([' ', '-', '_', ':'], StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return "VI";
+        if (parts.Length == 1) return parts[0][..Math.Min(3, parts[0].Length)].ToUpperInvariant();
+        return string.Concat(parts.Take(3).Select(p => char.ToUpperInvariant(p[0])));
+    }
+
+    static string FormatFactValue(AssetProfileFactDto fact)
+    {
+        if (string.Equals(fact.Label, "Last seen", StringComparison.OrdinalIgnoreCase))
+            return FmtAbsoluteTime(fact.Value);
+        return fact.Value ?? "--";
+    }
+
+    static string FmtAbsoluteTime(string? raw)
+    {
+        if (!DateTime.TryParse(raw, out var dt)) return raw ?? "--";
+        return dt.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await JS.InvokeVoidAsync("viAssetMiniMap.dispose", _miniMapId); }
+        catch { /* navigation/disconnect safe */ }
+    }
+}

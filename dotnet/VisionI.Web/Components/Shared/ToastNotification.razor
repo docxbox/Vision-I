@@ -1,0 +1,34 @@
+﻿@using VisionI.Web.Services
+
+@inject ToastService Toast
+
+@implements IDisposable
+
+@if (Toast.Queue.Count > 0)
+{
+    <div class="toast-stack" aria-live="polite">
+        @foreach (var msg in Toast.Queue)
+        {
+            <div class="toast toast-@msg.Level.ToString().ToLower()" @key="msg.Id">
+                <span class="toast-icon">@GetIcon(msg.Level)</span>
+                <span class="toast-text">@msg.Text</span>
+                <button class="toast-close" @onclick="() => Toast.Dismiss(msg.Id)" aria-label="Dismiss">×</button>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    protected override void OnInitialized() => Toast.OnChanged += OnToastChanged;
+    private void OnToastChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => Toast.OnChanged -= OnToastChanged;
+
+    private static string GetIcon(ToastLevel level) => level switch
+    {
+        ToastLevel.Success => "+",
+        ToastLevel.Warning => "!",
+        ToastLevel.Error   => "x",
+        _                  => "i"
+    };
+}
+

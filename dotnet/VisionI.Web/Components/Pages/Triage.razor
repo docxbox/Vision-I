@@ -1,0 +1,197 @@
+@page "/triage"
+@layout AnalystLayout
+@inject TriageService Svc
+@implements IDisposable
+
+<PageTitle>Triage | Vision-I</PageTitle>
+
+<div class="vi-page">
+    <div class="vi-page-hdr">
+        <div>
+            <div class="vi-kicker">Prioritize / Triage</div>
+            <h1 class="vi-h1">Event Triage</h1>
+            <div class="vi-sub">ANALYST REVIEW · PRIORITY ASSIGNMENT · SITUATION LINKAGE</div>
+        </div>
+        <div class="vi-page-actions">
+            <button class="vi-btn" disabled="@Svc.Loading" @onclick="() => Svc.LoadAsync()">Refresh</button>
+        </div>
+    </div>
+
+    <div class="vi-metrics">
+        <div class="vi-metric">
+            <div class="vi-metric-label">Candidates</div>
+            <div class="vi-metric-val accent">@Svc.Candidates.Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Queue</div>
+            <div class="vi-metric-val warn">@Svc.Queue.Count</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Related Alerts</div>
+            <div class="vi-metric-val">@Svc.RelatedAlertCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Related Actors</div>
+            <div class="vi-metric-val">@Svc.RelatedActorCount</div>
+        </div>
+        <div class="vi-metric">
+            <div class="vi-metric-label">Similar Decisions</div>
+            <div class="vi-metric-val">@Svc.SimilarDecisionCount</div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="vi-filter-bar">
+        <input class="vi-input sm" placeholder="Search…" style="width:180px;" @bind="Svc.Search" @bind:event="oninput" />
+        <input class="vi-input sm" placeholder="Source…" style="width:130px;" @bind="Svc.SourceFilter" @bind:event="oninput" />
+        <label class="vi-row" style="gap:5px;font:600 11px/1 var(--mono);color:var(--tm);">
+            <input type="checkbox" @bind="Svc.MineOnly" />
+            Mine only
+        </label>
+    </div>
+
+    @if (Svc.Loading)
+    {
+        <div class="vi-loading">LOADING TRIAGE</div>
+    }
+    else
+    {
+        <div class="vi-split wide" style="flex:1;min-height:0;">
+            <!-- Candidates list -->
+            <div class="vi-panel">
+                <div class="vi-panel-hdr">
+                    <span class="vi-panel-title">Triage Candidates</span>
+                    <span class="vi-chip info">@Svc.Candidates.Count</span>
+                </div>
+                @if (!Svc.Candidates.Any())
+                {
+                    <div class="vi-empty">
+                        <span class="material-symbols-outlined">rule</span>
+                        No candidates require triage
+                    </div>
+                }
+                else
+                {
+                    <div class="vi-tbl-wrap">
+                        <table class="vi-table">
+                            <thead>
+                                <tr>
+                                    <th>Event</th>
+                                    <th>Risk</th>
+                                    <th>Alerts</th>
+                                    <th>Actors</th>
+                                    <th>Similar Events</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var c in Svc.Candidates)
+                                {
+                                    <tr class="@(Svc.SelectedCandidate?.EventId == c.EventId ? "sel" : "")"
+                                        style="cursor:pointer;"
+                                        @onclick="() => Svc.SelectCandidateAsync(c)">
+                                        <td>
+                                            <div class="vi-td-title vi-trunc" style="max-width:260px;">@c.Title</div>
+                                            <div class="vi-td-note">@c.Source</div>
+                                        </td>
+                                        <td><span class="vi-chip @RiskCls(c.RiskScore ?? 0)">@((c.RiskScore ?? 0).ToString("0.0"))</span></td>
+                                        <td class="vi-td-mono">—</td>
+                                        <td class="vi-td-mono">@c.RelatedActorCount</td>
+                                        <td class="vi-td-mono">@c.SimilarEventCount</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+
+            <!-- Detail / draft -->
+            <div class="vi-panel soft">
+                @if (Svc.SelectedCandidate is { } sel)
+                {
+                    <div class="vi-panel-hdr">
+                        <span class="vi-panel-title vi-trunc">@sel.Title</span>
+                    </div>
+                    <div class="vi-panel-body vi-stack">
+                        @if (Svc.LoadingDetail)
+                        {
+                            <div class="vi-loading" style="padding:12px;">LOADING</div>
+                        }
+
+                        <div>
+                            <div class="vi-label">Triage Decision</div>
+                            <div class="vi-form-row">
+                                <select class="vi-select sm" @bind="Svc.DraftStatus">
+                                    <option value="reviewing">Reviewing</option>
+                                    <option value="escalated">Escalated</option>
+                                    <option value="dismissed">Dismissed</option>
+                                    <option value="actioned">Actioned</option>
+                                </select>
+                                <select class="vi-select sm" @bind="Svc.DraftPriority">
+                                    <option value="low">Low</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="high">High</option>
+                                    <option value="critical">Critical</option>
+                                </select>
+                            </div>
+                            <textarea class="vi-textarea" style="margin-top:6px;" placeholder="Analyst note…"
+                                      @bind="Svc.DraftNote"></textarea>
+                        </div>
+
+                        @if (Svc.RecommendedPlaybooks.Any())
+                        {
+                            <div>
+                                <div class="vi-label">Recommended Playbooks</div>
+                                <div class="vi-tags">
+                                    @foreach (var p in Svc.RecommendedPlaybooks)
+                                    {
+                                        <span class="vi-chip info">@p.Name</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrWhiteSpace(Svc.SituationCaseTitle))
+                        {
+                            <div class="vi-kv">
+                                <span class="vi-kv-key">Situation</span>
+                                <span class="vi-kv-val">@Svc.SituationCaseTitle</span>
+                            </div>
+                        }
+
+                        <!-- Workflow actions -->
+                        <div class="vi-row" style="gap:6px;flex-wrap:wrap;margin-top:4px;padding-top:8px;border-top:1px solid var(--bd);">
+                            @if (!string.IsNullOrWhiteSpace(sel.EventId))
+                            {
+                                <a class="vi-btn sm primary" href="/events/@Uri.EscapeDataString(sel.EventId)">Event Detail →</a>
+                                <a class="vi-btn sm" href="/operations?event=@Uri.EscapeDataString(sel.EventId)">Operations →</a>
+                            }
+                            <a class="vi-btn sm" href="/decisions">Decisions →</a>
+                            <a class="vi-btn sm" href="/playbooks">Playbooks →</a>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="vi-empty">
+                        <span class="material-symbols-outlined">rule</span>
+                        Select a candidate to triage
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        Svc.OnChanged += OnSvcChanged;
+        await Svc.LoadAsync(null, null);
+    }
+
+    void OnSvcChanged() => InvokeAsync(StateHasChanged);
+    static string RiskCls(double v) => v switch { > 0.7 => "err", > 0.4 => "warn", _ => "" };
+
+    public void Dispose() => Svc.OnChanged -= OnSvcChanged;
+}
